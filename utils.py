@@ -3,10 +3,10 @@ import pickle
 from _thread import start_new_thread
 
 
-def send_message(msg, channel_port):
+def send_message(msg, port):
     # Setup socket for the user to be send
     s_temp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s_temp.connect((socket.gethostname(), channel_port))
+    s_temp.connect((socket.gethostname(), port))
 
     # encode and send message
     msg = pickle.dumps(msg)
