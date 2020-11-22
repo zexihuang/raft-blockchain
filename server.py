@@ -52,10 +52,10 @@ class Server:
         self.voted_candidate_lock = Lock()
 
         # State variables for operation.
-
+        self.servers_operation_last_seen = [time.time(), time.time(), time.time()]
+        self.servers_log_next_index = [0, 0, 0]
 
         # State variables for vote.
-
 
         # State variables for client.
 
@@ -68,17 +68,21 @@ class Server:
 
         pass
 
-    def threaded_response_watch(self):
+    def threaded_response_watch(self, receiver):
         # Watch whether we receive response for a specific normal operation message sent. If not, resend the message.
-
-        pass
+        timeout_time = random.uniform(5.0, 10.0)
+        time.sleep(timeout_time)
+        if time.time() - self.servers_operation_last_seen[receiver] > timeout_time:
+            # timed out, resend
+            start_new_thread(self.threaded_response_watch, (receiver,))
+            start_new_thread(self.threaded_send_append_request, ([receiver],))
 
     def generate_operation_request_message(self, is_heartbeat=False):
         header = 'Operation-Request'
         sender = self.server_id
         receiver = None
         message = {
-            'term': self.term,
+            'term': self.server_term,
             'leader_id': self.server_id,
             'previous_log_index': ...,
             'previous_log_term': ...,
@@ -113,7 +117,6 @@ class Server:
     # Vote utilities.
     def threaded_leader_election_watch(self):
         # Watch whether the
-
 
     def threaded_on_leader_election_timeout(self):
         # Raise self to leader if timeout. Send request for votes. Step down if another leader elected.
