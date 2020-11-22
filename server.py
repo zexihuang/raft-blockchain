@@ -56,6 +56,10 @@ class Server:
         pass
 
     # Vote utilities.
+    def threaded_leader_election_watch(self):
+        # Watch whether the
+
+
     def threaded_on_leader_election_timeout(self):
         # Raise self to leader if timeout. Send request for votes. Step down if another leader elected.
 
