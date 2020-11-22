@@ -48,11 +48,11 @@ class Channel:
         # Relay the message from the sender to the receiver.
 
         Channel.network_delay()
-        connection.send(pickle.dumps('ACK'))
         header, sender, receiver, message = pickle.loads(connection.recv(Channel.BUFFER_SIZE))
+        connection.send(pickle.dumps('ACK'))
 
         # Based on the header and network configuration, decides whether to relay the message.
-        if header in ('Client-Request', 'Client-Feedback'):  # Always relay messages between a client and a server.
+        if header in ('Client-Request', 'Client-Response'):  # Always relay messages between a client and a server.
             relay = True
         else:  # Don't relay messages that involve an isolated server.
             if self.is_gate_open[sender] and self.is_gate_open[receiver]:
@@ -61,8 +61,14 @@ class Channel:
                 relay = False
 
         if relay:
-            socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            if header == 'Client-Request':
+            if header == 'Client-Response':  # Receiver is a client.
+                receiver_port = Channel.CLIENT_PORTS[receiver]
+            elif header in ('Client-Request', 'Client-Relay'):  # Receiver is the server's client listener port.
+                receiver_port = Channel.SERVER_PORTS[receiver][0]
+            elif header in ('Vote-Request', 'Vote-Response'):  # Receiver is the server's vote listener port.
+                receiver_port = Channel.SERVER_PORTS[receiver][1]
+            else:  # Receiver is the server's operation listener port.
+                receiver_port = Channel.SERVER_PORTS[receiver][2]
 
 
 
