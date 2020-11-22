@@ -43,8 +43,9 @@ def get_partition_config():
 
 
 class Channel:
+
     MAX_CONNECTION = 100
-    BUFFER_SIZE = 1024
+    BUFFER_SIZE = 65536
 
     CHANNEL_PORT = 10000
     CLIENT_PORTS = {
@@ -70,18 +71,42 @@ class Channel:
         self.is_gate_open = [True, True, True]
 
         # Set up the ports.
-        pass
+        self.port = Channel.CHANNEL_PORT
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.bind((socket.gethostname(), self.port))
 
-    def threaded_on_receive(self, connection, ip, port):
+        self.start()
+
+    def threaded_on_receive(self, connection):
         # Relay the message from the sender to the receiver.
 
         Channel.network_delay()
-        pass
+        connection.send(pickle.dumps('ACK'))
+        header, sender, receiver, message = pickle.loads(connection.recv(Channel.BUFFER_SIZE))
+
+        # Based on the header and network configuration, decides whether to relay the message.
+        if header in ('Client-Request', 'Client-Feedback'):  # Always relay messages between a client and a server.
+            relay = True
+        else:  # Don't relay messages that involve an isolated server.
+            if self.is_gate_open[sender] and self.is_gate_open[receiver]:
+                relay = True
+            else:
+                relay = False
+
+        if relay:
+            socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            if header == 'Client-Request':
+
+
+
 
     def start_message_listener(self):
         # Start the message listener for all incoming messages.
 
-        pass
+        self.socket.listen(Channel.MAX_CONNECTION)
+        while True:
+            connection, (ip, port) = self.socket.accept()
+            start_new_thread(self.threaded_on_receive, (connection, ))
 
     def configuration_change_handler(self):
         # Get input from the user to change the network configuration for network partition.
@@ -91,7 +116,8 @@ class Channel:
 
     def start(self):
         # Start the listener for messages and user input handler.
-        pass
+        self.start_message_listener()
+        self.configuration_change_handler()
 
 
 if __name__ == '__main__':

@@ -20,7 +20,7 @@ class Client:
         2: 10003
     }
     MAX_CONNECTION = 100
-    BUFFER_SIZE = 1024
+    BUFFER_SIZE = 65536
 
     def __init__(self):
         # Get user id, etc.
