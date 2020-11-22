@@ -12,7 +12,6 @@ import copy
 
 
 class Server:
-
     CHANNEL_PORT = 10000
     SERVER_PORTS = {
         # Client listener port, raft vote listener port, raft operation listener port.
@@ -30,7 +29,7 @@ class Server:
         # Initialize blockchains, balance tables, proof of work working area, etc.
         pass
 
-# Operation utilities.
+    # Operation utilities.
     def threaded_on_receive_operation(self, connection):
         # Receive and process append request/response and heartbeat messages.
 
@@ -53,10 +52,10 @@ class Server:
 
     def start_operation_listener(self):
         # Start listener for operation messages.
-
+        start_new_thread(self.threaded_on_receive_operation, ())
         pass
 
-# Vote utilities.
+    # Vote utilities.
     def threaded_on_leader_election_timeout(self):
         # Raise self to leader if timeout. Send request for votes. Step down if another leader elected.
 
@@ -72,7 +71,7 @@ class Server:
 
         pass
 
-# Blockchain and client message utilities.
+    # Blockchain and client message utilities.
     def threaded_commit_watch(self):
         # Inform the client if the transaction's block has been committed.
 
