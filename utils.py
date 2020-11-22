@@ -1,6 +1,5 @@
 import socket
 import pickle
-from _thread import start_new_thread
 
 
 def send_message(msg, port):
@@ -17,9 +16,3 @@ def send_message(msg, port):
     ack = pickle.loads(s_temp.recv(BUFFER_SIZE))
     # message_logger.info(f'Port {port} sends {ack}\n')
     s_temp.close()
-
-
-def broadcast_message(msg, receivers, channel_port):
-    for receiver in receivers:
-        msg[2] = receiver
-        start_new_thread(send_message, (msg, channel_port))
