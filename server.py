@@ -32,7 +32,7 @@ class Server:
             self.server_id = int(input('Which server are you? Enter 0, 1 or 2. \n'))
             if self.server_id in Server.SERVER_PORTS:
                 self.other_servers = {0, 1, 2} - {self.server_id}
-                self.sockets = [None, None, None]
+                self.sockets = [None, None, None]  # Client port, vote port, and operation port.
                 for i in range(3):
                     self.sockets[i] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     self.sockets[i].bind((socket.gethostname(), Server.SERVER_PORTS[self.server_id][i]))
@@ -117,9 +117,17 @@ class Server:
         pass
 
     # Vote utilities.
-    def threaded_leader_election_watch(self, timeout):
+    def generate_vote_request_message(self, ):
+
+    def threaded_leader_election_watch(self):
         # Watch whether the election has timed out. Call on leader election timeout if so.
 
+        # Update the last updated time.
+        self.last_election_time_lock.acquire()
+        self.last_election_time = time.time()
+        self.last_election_time_lock.release()
+
+        timeout = random.uniform(5.0, 10.0)
         time.sleep(timeout)
         self.last_election_time_lock.acquire()
         if time.time() - self.last_election_time >= timeout:
@@ -128,9 +136,20 @@ class Server:
 
 
     def threaded_on_leader_election_timeout(self):
-        # Raise self to leader if timeout. Send request for votes. Step down if another leader elected.
+        # Send request for votes. Step down if another leader elected.
 
-        pass
+        self.server_state_lock.acquire()
+        self.server_term_lock.acquire()
+        self.server_state = 'Candidate'
+        self.server_term += 1
+
+
+
+        self.server_state_lock.release()
+        self.server_term_lock.release()
+
+
+
 
     def threaded_on_receive_vote(self, connection):
         # Receive and process the vote request/response messages.
@@ -140,7 +159,10 @@ class Server:
     def start_vote_listener(self):
         # Start listener for vote messages.
 
-        pass
+        self.sockets[1].listen(Server.MAX_CONNECTION)
+        while True:
+            connection, (ip, port) = self.sockets[1].accept()
+            start_new_thread(self.threaded_on_receive_vote, (connection, ))
 
     # Blockchain and client message utilities.
     def threaded_commit_watch(self):
