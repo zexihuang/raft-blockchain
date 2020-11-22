@@ -56,6 +56,8 @@ class Server:
         self.servers_log_next_index = [0, 0, 0]
 
         # State variables for vote.
+        self.last_election_time = 0
+        self.last_election_time_lock = Lock()
 
         # State variables for client.
 
@@ -115,8 +117,15 @@ class Server:
         pass
 
     # Vote utilities.
-    def threaded_leader_election_watch(self):
-        # Watch whether the
+    def threaded_leader_election_watch(self, timeout):
+        # Watch whether the election has timed out. Call on leader election timeout if so.
+
+        time.sleep(timeout)
+        self.last_election_time_lock.acquire()
+        if time.time() - self.last_election_time >= timeout:
+            self.last_election_time_lock.release()
+            start_new_thread(self.threaded_on_leader_election_timeout, ())
+
 
     def threaded_on_leader_election_timeout(self):
         # Raise self to leader if timeout. Send request for votes. Step down if another leader elected.
