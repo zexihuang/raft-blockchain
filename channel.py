@@ -10,6 +10,38 @@ import pickle
 import numpy as np
 import copy
 
+
+def get_partition_config():
+    cur = [True, True, True]
+    config = input('\nHow do you partition? (use format: a;b-c, a and b in the same partition): ')
+    partitions = config.split("-")
+
+    # check if the input is valid:
+    seen = set()
+    for partition in partitions:
+        for node in partition.split(";"):
+            if node in ['0', '1', '2']:
+                seen.add(int(node))
+            else:
+                print('Config format is wrong')
+                return cur
+    if len(seen) < 3:
+        print("Config format in wrong")
+        return cur
+
+    # format is valid, check partition
+    if len(partitions) == 3:
+        # all are isolated
+        cur = [False, False, False]
+    elif len(partitions) == 2:
+        # one isolated
+        if len(partitions[0]) == 1:
+            cur[int(partitions[0])] = False
+        else:
+            cur[int(partitions[1])] = False
+    return cur
+
+
 class Channel:
 
     MAX_CONNECTION = 100
@@ -36,6 +68,7 @@ class Channel:
 
     def __init__(self):
         # Set up the network configurations.
+        self.is_gate_open = [True, True, True]
 
         # Set up the ports.
         self.port = Channel.CHANNEL_PORT
@@ -81,16 +114,16 @@ class Channel:
             connection, (ip, port) = self.socket.accept()
             start_new_thread(self.threaded_on_receive, (connection, ))
 
-    def configuration_change_hanlder(self):
+    def configuration_change_handler(self):
         # Get input from the user to change the network configuration for network partition.
-
-        pass
+        while True:
+            self.is_gate_open = get_partition_config()
+            print(f"Configuration has changed to: {self.is_gate_open}")
 
     def start(self):
         # Start the listener for messages and user input handler.
-
         self.start_message_listener()
-        self.configuration_change_hanlder()
+        self.configuration_change_handler()
 
 
 if __name__ == '__main__':
