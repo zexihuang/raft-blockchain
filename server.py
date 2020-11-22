@@ -75,19 +75,85 @@ class Server:
         self.balance_table = []
 
     # Operation utilities.
-    def threaded_on_receive_operation(self, msg):
-        # Receive and process append request/response and heartbeat messages.
-        if msg[0] == 'Operation-Request':
+    def on_receive_operation_request(self, msg):
+        self.server_term_lock.acquire()
+        if msg[3]['term'] < self.server_term:
+            self.server_term_lock.release()
+            # TODO: reject with message term=current_term and success is failed, with 'operation-response'
+            pass
+        elif msg[3]['term'] >= self.server_term:
+            if msg[3]['term'] > self.server_term:
+                self.server_term = msg[3]['term']
+                self.server_state_lock.acquire()
+                self.voted_candidate_lock.acquire()
+                self.server_state = 'Follower'
+                self.voted_candidate = None
+                self.voted_candidate_lock.release()
+                self.server_state_lock.release()
+                self.server_term_lock.release()
+                start_new_thread(self.threaded_leader_election_watch, ())
+
+            # server term and message term are equal
             if len(msg[3]['entries']) == 0:  # heartbeat message
                 start_new_thread(self.threaded_leader_election_watch, ())
             else:  # append message
-                pass
+                self.blockchain_lock.acquire()
+                # TODO: checkout 'term' key when implement blockchain
+                if msg[3]['previous_log_term'] != self.blockchain[msg[3]['previous_log_index']]['term']:
+                    # TODO: reject with message term=current_term and success is failed, with 'operation-response'
+                    pass
+                else:  # matches update blockchain
+                    self.blockchain = self.blockchain[:msg[3]['previous_log_index'] + 1] + msg[3]['entries']
+                self.blockchain_lock.release()
 
+            self.commit_index_lock.acquire()
+            self.commit_index = msg[3]['commit_index']
+            self.commit_index_lock.release()
+
+    def on_receive_operation_response(self, msg):
+        term = msg[3]['term']
+        success = msg[3]['success']
+        term_change = False
+
+        if success:
+            self.servers_log_next_index_lock.acquire()
+            self.blockchain_lock.acquire()
+            self.servers_log_next_index[msg[1]] = len(self.blockchain) - 1
+            self.blockchain_lock.release()
+            self.servers_log_next_index_lock.release()
+
+            # TODO: check majority
+
+        self.server_term_lock.acquire()
+        if term > self.server_term:
+            self.server_term = term
+            term_change = True
+            self.server_state_lock.acquire()
+            self.voted_candidate_lock.acquire()
+            self.server_state = 'Follower'
+            self.voted_candidate = None
+            self.voted_candidate_lock.release()
+            self.server_state_lock.release()
+            start_new_thread(self.threaded_leader_election_watch, ())
+        self.server_term_lock.release()
+
+        if not success and not term_change:  # index problem, retry
+            self.servers_log_next_index_lock.acquire()
+            self.servers_log_next_index[msg[1]] -= 1
+            self.servers_log_next_index_lock.release()
+            start_new_thread(self.threaded_response_watch, (msg[1],))
+            start_new_thread(self.threaded_send_append_request, ([msg[1]],))
+
+
+    def threaded_on_receive_operation(self, msg):
+        # TODO: get message from channel
+        # Receive and process append request/response and heartbeat messages.
+        if msg[0] == 'Operation-Request':
+            self.on_receive_operation_request(msg)
         elif msg[0] == 'Operation-Response':
-            pass
+            self.on_receive_operation_response(msg)
         else:
             raise NotImplementedError(f'Header {msg[0]} is not related!')
-
 
     def threaded_response_watch(self, receiver):
         # Watch whether we receive response for a specific normal operation message sent. If not, resend the message.
@@ -120,26 +186,26 @@ class Server:
             'entries': [] if is_heartbeat else self.blockchain[next_log_index:],
             'commit_index': self.commit_index
         }
-        return [header, sender, receiver, message]
+        return header, sender, receiver, message
 
     def threaded_send_append_request(self, receivers):
         # Send append requests to followers.
         for receiver in receivers:
             msg = self.generate_operation_request_message(receiver)
             start_new_thread(self.threaded_on_receive_operation, ())
-            start_new_thread(utils.send_message, (tuple(msg), Server.CHANNEL_PORT))
+            start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
     def threaded_heartbeat(self):
         # Send normal operation heartbeats to the followers.
         for receiver in self.other_servers:
             msg = self.generate_operation_request_message(receiver, is_heartbeat=True)
             start_new_thread(self.threaded_on_receive_operation, ())
-            start_new_thread(utils.send_message, (tuple(msg), Server.CHANNEL_PORT))
+            start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
     def start_operation_listener(self):
         # Start listener for operation messages.
-        start_new_thread(self.threaded_on_receive_operation, ())
-        start_new_thread(self.threaded_heartbeat, ())
+        # start_new_thread(self.threaded_on_receive_operation, ())
+        # start_new_thread(self.threaded_heartbeat, ())
         pass
 
     # Vote utilities.
@@ -171,6 +237,8 @@ class Server:
     def threaded_commit_watch(self):
         # Inform the client if the transaction's block has been committed.
 
+        # TODO: commit watch will check commit index variable, but we need to consider commit index variable can be larger
+        # TODO: than the size of the blockchain, so it will pass.
         pass
 
     def proof_of_work(self):
