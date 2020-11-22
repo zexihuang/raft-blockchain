@@ -12,20 +12,6 @@ import copy
 import utils
 
 
-def get_user(sender):
-    possible_users = {0, 1, 2} - {sender}
-    try:
-        action = int(input('Which user to send message? \n'))
-        if action in possible_users:
-            return action
-        else:
-            print(f'Wrong input! It should be in {possible_users}')
-            return -1
-    except Exception as e:
-        print(f'Wrong input! It should be in {possible_users}')
-        return -1
-
-
 class Server:
     CHANNEL_PORT = 10000
     SERVER_PORTS = {
@@ -55,8 +41,23 @@ class Server:
                 print('Wrong server name. Please enter 0, 1 or 2.')
 
         # Initialize blockchains, balance tables, proof of work working area, etc.
-        self.state = 'Follower'
-        start_new_thread(self.threaded_on_leader_election_timeout, ())
+        # Server state.
+        self.server_state = 'Follower'  # Follower, Leader, Candidate
+        self.server_state_lock = Lock()
+        # Server term.
+        self.server_term = 0
+        self.server_term_lock = Lock()
+        # Voted candidate.
+        self.voted_candidate = None
+        self.voted_candidate_lock = Lock()
+
+        # State variables for operation.
+
+
+        # State variables for vote.
+
+
+        # State variables for client.
 
         self.blockchain = []
         self.balance_table = []
