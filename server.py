@@ -9,6 +9,21 @@ from threading import Lock
 import pickle
 import numpy as np
 import copy
+import utils
+
+
+def get_user(sender):
+    possible_users = {0, 1, 2} - {sender}
+    try:
+        action = int(input('Which user to send message? \n'))
+        if action in possible_users:
+            return action
+        else:
+            print(f'Wrong input! It should be in {possible_users}')
+            return -1
+    except Exception as e:
+        print(f'Wrong input! It should be in {possible_users}')
+        return -1
 
 
 class Server:
@@ -26,8 +41,25 @@ class Server:
     MESSAGE_SENDING_TIMEOUT = 10
 
     def __init__(self):
+        # Get the server name.
+        while True:
+            self.server_id = int(input('Which server are you? Enter 0, 1 or 2. \n'))
+            if self.server_id in Server.SERVER_PORTS:
+                self.other_servers = {0, 1, 2} - {self.server_id}
+                self.sockets = [None, None, None]
+                for i in range(3):
+                    self.sockets[i] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    self.sockets[i].bind((socket.gethostname(), Server.SERVER_PORTS[self.server_id][i]))
+                break
+            else:
+                print('Wrong server name. Please enter 0, 1 or 2.')
+
         # Initialize blockchains, balance tables, proof of work working area, etc.
-        pass
+        self.state = 'Follower'
+        start_new_thread(self.threaded_on_leader_election_timeout, ())
+
+        self.blockchain = []
+        self.balance_table = []
 
     # Operation utilities.
     def threaded_on_receive_operation(self, connection):
@@ -40,19 +72,41 @@ class Server:
 
         pass
 
-    def threaded_send_append_request(self):
-        # Send append requests to followers.
+    def generate_operation_request_message(self, is_heartbeat=False):
+        header = 'Operation-Request'
+        sender = self.server_id
+        receiver = None
+        message = {
+            'term': self.term,
+            'leader_id': self.server_id,
+            'previous_log_index': ...,
+            'previous_log_term': ...,
+            'entries': [] if is_heartbeat else [...],
+            'commit_index': ...
+        }
+        return [header, sender, receiver, message]
 
-        pass
+    def threaded_send_append_request(self, receivers):
+        # Send append requests to followers.
+        msg = self.generate_operation_request_message()
+        for receiver in receivers:
+            msg[2] = receiver
+            start_new_thread(self.threaded_on_receive_operation, ())
+            start_new_thread(utils.send_message, (tuple(msg), Server.CHANNEL_PORT))
 
     def threaded_heartbeat(self):
         # Send normal operation heartbeats to the followers.
-
-        pass
+        while self.state == 'Leader':
+            msg = self.generate_operation_request_message(is_heartbeat=True)
+            for receiver in self.other_servers:
+                msg[2] = receiver
+                start_new_thread(self.threaded_on_receive_operation, ())
+                start_new_thread(utils.send_message, (tuple(msg), Server.CHANNEL_PORT))
 
     def start_operation_listener(self):
         # Start listener for operation messages.
         start_new_thread(self.threaded_on_receive_operation, ())
+        start_new_thread(self.threaded_heartbeat, ())
         pass
 
     # Vote utilities.
