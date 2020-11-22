@@ -37,15 +37,14 @@ class Channel:
         time.sleep(delay)
 
     def __init__(self):
-        # Set up the network configurations.
+        # Set up the network configuration and its lock.
         self.is_gate_open = [True, True, True]
+        self.lock = Lock()
 
         # Set up the ports.
         self.port = Channel.CHANNEL_PORT
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.bind((socket.gethostname(), self.port))
-
-        self.start()
 
     def threaded_on_receive(self, connection):
         # Relay the message from the sender to the receiver.
@@ -58,10 +57,12 @@ class Channel:
         if header in ('Client-Request', 'Client-Response'):  # Always relay messages between a client and a server.
             relay = True
         else:  # Don't relay messages that involve an isolated server.
+            self.lock.acquire()
             if self.is_gate_open[sender] and self.is_gate_open[receiver]:
                 relay = True
             else:
                 relay = False
+            self.lock.release()
 
         if relay:
             if header == 'Client-Response':  # Receiver is a client.
