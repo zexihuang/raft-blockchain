@@ -11,6 +11,7 @@ import numpy as np
 import copy
 import utils
 import math
+import hashlib
 
 
 class Server:
@@ -78,7 +79,7 @@ class Server:
         self.received_votes_lock = Lock()
 
         # State variables for client.
-        self.blockchain = []  # each block: {'term': ..., 'phash': ..., 'nonce': ..., 'transactions': []}
+        self.blockchain = []  # each block: {'term': ..., 'phash': ..., 'nonce': ..., 'transactions': ["NULL", "NULL", "NULL"]}
         self.blockchain_lock = Lock()
         self.balance_table = []
 
@@ -429,10 +430,16 @@ class Server:
 
     def proof_of_work(self):
         # Doing proof of work based on the queue of transactions.
+        while True:
+            transactions = ...  # transactions of block to be added to chain
+            nonce = ...  # random string with ending 0 or 1 or 2.
+            will_encode = "|".join(transactions) + "|" + nonce
+            cur_pow = hashlib.sha3_256(will_encode.encode('utf-8')).hexdigest()
+            if '2' > cur_pow[-1] > '0':
+                # TODO: PoW found, add blockchain
+                break
 
         # Once a block is added to the block chain, call commit watch and send append request.
-
-        pass
 
     def threaded_on_receive_client(self, connection):
         # Receive transaction request from client.
