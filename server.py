@@ -47,6 +47,9 @@ class Server:
         self.server_state = 'Follower'  # Follower, Leader, Candidate
         self.server_state_lock = Lock()
 
+        self.leader_id = -1
+        self.leader_id_lock = Lock()
+
         # Server term.
         self.server_term = 0
         self.server_term_lock = Lock()
@@ -142,6 +145,9 @@ class Server:
                 start_new_thread(self.threaded_leader_election_watch, ())
 
             # server term and message term are equal
+            self.leader_id_lock.acquire()
+            self.leader_id = message['leader_id']
+            self.leader_id_lock.release()
             if len(message['entries']) == 0:  # heartbeat message
                 start_new_thread(self.threaded_leader_election_watch, ())
             else:  # append message
@@ -218,7 +224,7 @@ class Server:
 
     def threaded_response_watch(self, receiver):
         # Watch whether we receive response for a specific normal operation message sent. If not, resend the message.
-        timeout = random.uniform(40.0, 80.0)
+        timeout = random.uniform(10.0, 20.0)
         time.sleep(timeout)
         self.servers_operation_last_seen_lock.acquire()
         if time.time() - self.servers_operation_last_seen[receiver] > timeout:  # timed out, resend
@@ -257,13 +263,20 @@ class Server:
         self.servers_log_next_index_lock.release()
         self.server_state_lock.release()
 
-        start_new_thread(self.threaded_heartbeat, ())
+        self.server_state_lock.acquire()
+        while self.server_state == 'Leader':
+            start_new_thread(self.threaded_heartbeat, ())
+            self.server_state_lock.release()
+            self.server_state_lock.acquire()
+        self.server_state_lock.release()
 
     def start_operation_listener(self):
         # Start listener for operation messages.
-        # start_new_thread(self.threaded_on_receive_operation, ())
-        # start_new_thread(self.threaded_heartbeat, ())
-        pass
+
+        self.sockets[1].listen(Server.MAX_CONNECTION)
+        while True:
+            connection, (ip, port) = self.sockets[1].accept()
+            start_new_thread(self.threaded_on_receive_operation, (connection,))
 
     # Vote utilities.
     def threaded_leader_election_watch(self):
