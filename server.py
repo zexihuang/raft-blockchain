@@ -204,6 +204,12 @@ class Server:
             start_new_thread(self.threaded_on_receive_operation, ())
             start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
+    def threaded_become_leader(self):
+        # Initialize the next index, last log index, send the first heartbeat.
+        # TODO: implement
+
+        pass
+
     def start_operation_listener(self):
         # Start listener for operation messages.
         # start_new_thread(self.threaded_on_receive_operation, ())
@@ -319,22 +325,29 @@ class Server:
             self.server_state_lock.acquire()
             self.server_term_lock.acquire()
             self.received_votes_lock.acquire()
+            self.last_election_time_lock.acquire()
+
+            become_leader = False
 
             if message['term'] > self.server_term:  # Discover higher term.
                 self.server_term = message['term']
                 self.server_state = 'Follower'
 
             if self.server_state == 'Candidate':  # Hasn't stepped down yet.
-                if message['vote'] and message['term'] == self.server_term:
+                if message['vote'] and message['term'] == self.server_term:  # Receive vote for current term.
                     self.received_votes += 1
-                if self.received_votes > len(Server.SERVER_PORTS) // 2 + 1:
+                if self.received_votes > len(Server.SERVER_PORTS) // 2 + 1:  # Received enough votes to become leader.
                     self.server_state = 'Leader'
+                    become_leader = True
+                    self.last_election_time = time.time()  # Update the last election time to avoid previous timeout watches. Don't start new timeout watch.
 
             self.server_state_lock.release()
             self.server_term_lock.release()
             self.received_votes_lock.release()
+            self.last_election_time_lock.release()
 
-
+            if become_leader:
+                start_new_thread(self.threaded_become_leader, ())
 
     def start_vote_listener(self):
         # Start listener for vote messages.
