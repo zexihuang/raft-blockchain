@@ -1,6 +1,8 @@
 import socket
 import pickle
 
+BUFFER_SIZE = 65536
+
 
 def send_message(msg, port):
     # Setup socket for the user to be send
@@ -12,7 +14,16 @@ def send_message(msg, port):
     s_temp.send(msg)
 
     # Receive ack.
-    BUFFER_SIZE = 65536
+
     ack = pickle.loads(s_temp.recv(BUFFER_SIZE))
     # message_logger.info(f'Port {port} sends {ack}\n')
     s_temp.close()
+
+
+def receive_message(connection):
+    # Receive message and send acknowledgement.
+
+    header, sender, receiver, message = pickle.loads(connection.recv(BUFFER_SIZE))
+    connection.send(pickle.dumps('ACK'))
+
+    return header, sender, receiver, message

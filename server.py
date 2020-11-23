@@ -282,8 +282,7 @@ class Server:
     def threaded_on_receive_vote(self, connection):
         # Receive and process the vote request/response messages.
 
-        header, sender, receiver, message = pickle.loads(connection.recv(Server.BUFFER_SIZE))
-        connection.send(pickle.dumps('ACK'))
+        header, sender, receiver, message = utils.receive_message(connection)
 
         if header == 'Vote-Request':
             self.server_term_lock.acquire()

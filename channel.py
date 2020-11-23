@@ -50,8 +50,7 @@ class Channel:
         # Relay the message from the sender to the receiver.
 
         Channel.network_delay()
-        header, sender, receiver, message = pickle.loads(connection.recv(Channel.BUFFER_SIZE))
-        connection.send(pickle.dumps('ACK'))
+        header, sender, receiver, message = utils.receive_message(connection)
 
         # Based on the header and network configuration, decides whether to relay the message.
         if header in ('Client-Request', 'Client-Response'):  # Always relay messages between a client and a server.
@@ -124,8 +123,12 @@ class Channel:
 
     def start(self):
         # Start the listener for messages and user input handler.
-        self.start_message_listener()
-        self.configuration_change_handler()
+
+        start_new_thread(self.start_message_listener, ())
+        start_new_thread(self.configuration_change_handler, ())
+
+        while 1:
+            pass
 
 
 if __name__ == '__main__':
