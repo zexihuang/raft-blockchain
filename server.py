@@ -12,6 +12,7 @@ import copy
 import utils
 import math
 
+
 class Server:
     CHANNEL_PORT = 10000
     SERVER_PORTS = {
@@ -57,6 +58,9 @@ class Server:
         self.servers_log_next_index = [0, 0, 0]
         self.servers_log_next_index_lock = Lock()
 
+        self.received_success = 0
+        self.received_success_lock = Lock()
+
         self.commit_index = 0
         self.commit_index_lock = Lock()
 
@@ -71,60 +75,114 @@ class Server:
         self.received_votes_lock = Lock()
 
         # State variables for client.
-
-        self.blockchain = []
+        self.blockchain = []  # each block: {'term': ..., 'phash': ..., 'nonce': ..., 'transactions': []}
         self.blockchain_lock = Lock()
         self.balance_table = []
 
     # Operation utilities.
-    def on_receive_operation_request(self, msg):
+    def generate_operation_response_message(self, receiver, success):
+        # server_term is already locked here...
+        header = 'Operation-Response'
+        sender = self.server_id
+
+        message = {
+            'term': self.server_term,
+            'success': success
+        }
+
+        return header, sender, receiver, message
+
+    def generate_operation_request_message(self, receiver, is_heartbeat=False):
+        header = 'Operation-Request'
+        sender = self.server_id
+
         self.server_term_lock.acquire()
-        if msg[3]['term'] < self.server_term:
-            self.server_term_lock.release()
-            # TODO: reject with message term=current_term and success is failed, with 'operation-response'
-            pass
-        elif msg[3]['term'] >= self.server_term:
-            if msg[3]['term'] > self.server_term:
-                self.server_term = msg[3]['term']
+        self.commit_index_lock.acquire()
+        self.servers_log_next_index_lock.acquire()
+        self.blockchain_lock.acquire()
+
+        next_log_index = self.servers_log_next_index[receiver]
+        previous_log_index = next_log_index - 1
+        previous_log_term = self.blockchain[previous_log_index]['term']
+        message = {
+            'term': self.server_term,
+            'leader_id': self.server_id,
+            'previous_log_index': previous_log_index,
+            'previous_log_term': previous_log_term,
+            'entries': [] if is_heartbeat else self.blockchain[next_log_index:],
+            'commit_index': self.commit_index
+        }
+
+        self.servers_log_next_index_lock.release()
+        self.blockchain_lock.release()
+        self.commit_index_lock.release()
+        self.server_term_lock.release()
+
+        return header, sender, receiver, message
+
+    def on_receive_operation_request(self, sender, message):
+        self.server_term_lock.acquire()
+        if message['term'] < self.server_term:
+            # reject message because term is smaller.
+            msg = self.generate_operation_response_message(sender, success=False)
+            start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+        elif message['term'] >= self.server_term:
+            if message['term'] > self.server_term:
+                # saw bigger term from another process, step down, and continue
+                self.server_term = message['term']
+
                 self.server_state_lock.acquire()
                 self.voted_candidate_lock.acquire()
+
                 self.server_state = 'Follower'
                 self.voted_candidate = None
+
                 self.voted_candidate_lock.release()
                 self.server_state_lock.release()
-                self.server_term_lock.release()
                 start_new_thread(self.threaded_leader_election_watch, ())
 
             # server term and message term are equal
-            if len(msg[3]['entries']) == 0:  # heartbeat message
+            if len(message['entries']) == 0:  # heartbeat message
                 start_new_thread(self.threaded_leader_election_watch, ())
             else:  # append message
                 self.blockchain_lock.acquire()
-                # TODO: checkout 'term' key when implement blockchain
-                if msg[3]['previous_log_term'] != self.blockchain[msg[3]['previous_log_index']]['term']:
-                    # TODO: reject with message term=current_term and success is failed, with 'operation-response'
-                    pass
-                else:  # matches update blockchain
-                    self.blockchain = self.blockchain[:msg[3]['previous_log_index'] + 1] + msg[3]['entries']
+
+                prev_log_index = message['previous_log_index']
+                if len(self.blockchain) > prev_log_index and \
+                        message['previous_log_term'] == self.blockchain[prev_log_index]['term']:  # matches update blockchain
+                    self.blockchain = self.blockchain[:message['previous_log_index'] + 1] + message['entries']
+                else:
+                    msg = self.generate_operation_response_message(sender, success=False)
+                    start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
                 self.blockchain_lock.release()
 
+            # update commit index depends on given message
             self.commit_index_lock.acquire()
-            self.commit_index = msg[3]['commit_index']
+            self.commit_index = message['commit_index']
             self.commit_index_lock.release()
+        self.server_term_lock.release()
 
-    def on_receive_operation_response(self, msg):
-        term = msg[3]['term']
-        success = msg[3]['success']
+    def on_receive_operation_response(self, sender, message):
+        term = message['term']
+        success = message['success']
         term_change = False
 
         if success:
             self.servers_log_next_index_lock.acquire()
             self.blockchain_lock.acquire()
-            self.servers_log_next_index[msg[1]] = len(self.blockchain) - 1
+            self.received_success_lock.acquire()
+            self.commit_index_lock.acquire()
+
+            self.servers_log_next_index[sender] = len(self.blockchain) - 1
+            self.received_success += 1
+
+            if self.received_success >= len(Server.SERVER_PORTS) // 2 + 1:  # Received enough success to commit.
+                self.commit_index += 1
+
+            self.commit_index_lock.release()
+            self.received_success_lock.release()
             self.blockchain_lock.release()
             self.servers_log_next_index_lock.release()
-
-            # TODO: check majority
 
         self.server_term_lock.acquire()
         if term > self.server_term:
@@ -141,21 +199,22 @@ class Server:
 
         if not success and not term_change:  # index problem, retry
             self.servers_log_next_index_lock.acquire()
-            self.servers_log_next_index[msg[1]] -= 1
+            self.servers_log_next_index[sender] -= 1
             self.servers_log_next_index_lock.release()
-            start_new_thread(self.threaded_response_watch, (msg[1],))
-            start_new_thread(self.threaded_send_append_request, ([msg[1]],))
+            start_new_thread(self.threaded_response_watch, (sender,))
+            start_new_thread(self.threaded_send_append_request, ([sender],))
 
-
-    def threaded_on_receive_operation(self, msg):
-        # TODO: get message from channel
+    def threaded_on_receive_operation(self, connection):
         # Receive and process append request/response and heartbeat messages.
-        if msg[0] == 'Operation-Request':
-            self.on_receive_operation_request(msg)
-        elif msg[0] == 'Operation-Response':
-            self.on_receive_operation_response(msg)
+
+        header, sender, receiver, message = utils.receive_message(connection)
+
+        if header == 'Operation-Request':
+            self.on_receive_operation_request(sender, message)
+        elif header == 'Operation-Response':
+            self.on_receive_operation_response(sender, message)
         else:
-            raise NotImplementedError(f'Header {msg[0]} is not related!')
+            raise NotImplementedError(f'Header {header} is not related!')
 
     def threaded_response_watch(self, receiver):
         # Watch whether we receive response for a specific normal operation message sent. If not, resend the message.
@@ -167,31 +226,12 @@ class Server:
             start_new_thread(self.threaded_response_watch, (receiver,))
             start_new_thread(self.threaded_send_append_request, ([receiver],))
 
-    def generate_operation_request_message(self, receiver, is_heartbeat=False):
-        header = 'Operation-Request'
-        sender = self.server_id
-
-        self.servers_log_next_index_lock.acquire()
-        self.blockchain_lock.acquire()
-        previous_log_index = self.servers_log_next_index[receiver] - 1
-        next_log_index = self.servers_log_next_index[receiver]
-        # TODO: checkout 'term' key when implement blockchain
-        previous_log_term = self.blockchain[previous_log_index]['term']
-        self.servers_log_next_index_lock.release()
-        self.blockchain_lock.release()
-
-        message = {
-            'term': self.server_term,
-            'leader_id': self.server_id,
-            'previous_log_index': previous_log_index,
-            'previous_log_term': previous_log_term,
-            'entries': [] if is_heartbeat else self.blockchain[next_log_index:],
-            'commit_index': self.commit_index
-        }
-        return header, sender, receiver, message
-
     def threaded_send_append_request(self, receivers):
         # Send append requests to followers.
+        self.received_success_lock.acquire()
+        self.received_success = 1 if self.received_success == 0 else self.received_success
+        self.received_success_lock.release()
+
         for receiver in receivers:
             msg = self.generate_operation_request_message(receiver)
             start_new_thread(self.threaded_on_receive_operation, ())
@@ -206,9 +246,18 @@ class Server:
 
     def threaded_become_leader(self):
         # Initialize the next index, last log index, send the first heartbeat.
-        # TODO: implement
+        self.server_state_lock.acquire()
+        self.servers_log_next_index_lock.acquire()
+        self.blockchain_lock.acquire()
 
-        pass
+        self.server_state = 'Leader'
+        self.servers_log_next_index = 3 * [len(self.blockchain)]
+
+        self.blockchain_lock.release()
+        self.servers_log_next_index_lock.release()
+        self.server_state_lock.release()
+
+        start_new_thread(self.threaded_heartbeat, ())
 
     def start_operation_listener(self):
         # Start listener for operation messages.
@@ -301,7 +350,7 @@ class Server:
                     and self.voted_candidate in {None, message['candidate_id']} \
                     and not \
                     (self.blockchain[-1]['term'] > message['last_log_term']
-                     or (self.blockchain[-1]['term'] == message['last_log_term'] and len(self.blockchain)-1 > message['last_log_index'])):
+                     or (self.blockchain[-1]['term'] == message['last_log_term'] and len(self.blockchain) - 1 > message['last_log_index'])):
 
                 vote = True
                 self.voted_candidate = message['candidate_id']
@@ -335,6 +384,7 @@ class Server:
             if self.server_state == 'Candidate':  # Hasn't stepped down yet.
                 if message['vote'] and message['term'] == self.server_term:  # Receive vote for current term.
                     self.received_votes += 1
+                # TODO: check here, it should be >=
                 if self.received_votes > len(Server.SERVER_PORTS) // 2 + 1:  # Received enough votes to become leader.
                     self.server_state = 'Leader'
                     become_leader = True
@@ -354,7 +404,7 @@ class Server:
         self.sockets[1].listen(Server.MAX_CONNECTION)
         while True:
             connection, (ip, port) = self.sockets[1].accept()
-            start_new_thread(self.threaded_on_receive_vote, (connection, ))
+            start_new_thread(self.threaded_on_receive_vote, (connection,))
 
     # Blockchain and client message utilities.
     def threaded_commit_watch(self):
