@@ -48,7 +48,7 @@ class Server:
         self.server_state = 'Follower'  # Follower, Leader, Candidate
         self.server_state_lock = Lock()
 
-        self.leader_id = -1
+        self.leader_id = None
         self.leader_id_lock = Lock()
 
         # Server term.
@@ -79,9 +79,11 @@ class Server:
         self.received_votes_lock = Lock()
 
         # State variables for client.
-        self.blockchain = []  # each block: {'term': ..., 'phash': ..., 'nonce': ..., 'transactions': ["NULL", "NULL", "NULL"]}
+        self.blockchain = []  # each block: {'term': ..., 'phash': ..., 'nonce': ..., 'transactions': [(A, B, 5), A, None]}
         self.blockchain_lock = Lock()
+
         self.balance_table = []
+        self.balance_table_lock = Lock()
 
     # Operation utilities.
     def generate_operation_response_message(self, receiver, success):
@@ -256,13 +258,16 @@ class Server:
         self.server_state_lock.acquire()
         self.servers_log_next_index_lock.acquire()
         self.blockchain_lock.acquire()
+        self.leader_id_lock.acquire()
 
         self.server_state = 'Leader'
         self.servers_log_next_index = 3 * [len(self.blockchain)]
+        self.leader_id = self.server_id
 
         self.blockchain_lock.release()
         self.servers_log_next_index_lock.release()
         self.server_state_lock.release()
+        self.leader_id_lock.release()
 
         self.server_state_lock.acquire()
         while self.server_state == 'Leader':
@@ -274,9 +279,9 @@ class Server:
     def start_operation_listener(self):
         # Start listener for operation messages.
 
-        self.sockets[1].listen(Server.MAX_CONNECTION)
+        self.sockets[2].listen(Server.MAX_CONNECTION)
         while True:
-            connection, (ip, port) = self.sockets[1].accept()
+            connection, (ip, port) = self.sockets[2].accept()
             start_new_thread(self.threaded_on_receive_operation, (connection,))
 
     # Vote utilities.
@@ -315,11 +320,13 @@ class Server:
         self.blockchain_lock.acquire()
         self.voted_candidate_lock.acquire()
         self.received_votes_lock.acquire()
+        self.leader_id_lock.acquire()
 
         self.server_state = 'Candidate'
         self.server_term += 1
         self.voted_candidate = self.server_id
         self.received_votes = 1
+        self.leader_id = None
         msgs = [self.generate_vote_request_message(receiver) for receiver in self.other_servers]
 
         self.server_state_lock.release()
@@ -327,6 +334,7 @@ class Server:
         self.blockchain_lock.release()
         self.voted_candidate_lock.release()
         self.received_votes_lock.release()
+        self.leader_id_lock.release()
 
         for msg in msgs:
             start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
@@ -342,75 +350,86 @@ class Server:
         }
         return header, sender, receiver, message
 
+# TODO: set current leader id to None if needed.
+    def on_receive_vote_request(self, message):
+        # Receive and process vote request.
+
+        self.server_term_lock.acquire()
+        self.server_state_lock.acquire()
+        self.voted_candidate_lock.acquire()
+        self.blockchain_lock.acquire()
+
+        # Update term.
+        if message['term'] > self.server_term:
+            self.server_term = message['term']
+            self.server_state = 'Follower'
+            self.voted_candidate = None
+
+        # Decide whether to cast vote.
+        if message['term'] == self.server_term \
+                and self.voted_candidate in {None, message['candidate_id']} \
+                and not \
+                (self.blockchain[-1]['term'] > message['last_log_term']
+                 or (self.blockchain[-1]['term'] == message['last_log_term'] and len(self.blockchain) - 1 > message['last_log_index'])):
+
+            vote = True
+            self.voted_candidate = message['candidate_id']
+
+        else:
+            vote = False
+        msg = self.generate_vote_response_message(message['candidate_id'], vote)
+
+        self.server_term_lock.release()
+        self.server_state_lock.release()
+        self.voted_candidate_lock.release()
+        self.blockchain_lock.release()
+
+        # Send message and reset election timeout if vote.
+        start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+        if vote:
+            start_new_thread(self.threaded_leader_election_watch, ())
+
+    def on_receive_vote_response(self, message):
+        # Receive and process vote response.
+
+        self.server_state_lock.acquire()
+        self.server_term_lock.acquire()
+        self.received_votes_lock.acquire()
+        self.last_election_time_lock.acquire()
+
+        become_leader = False
+
+        if message['term'] > self.server_term:  # Discover higher term.
+            self.server_term = message['term']
+            self.server_state = 'Follower'
+
+        if self.server_state == 'Candidate':  # Hasn't stepped down yet.
+            if message['vote'] and message['term'] == self.server_term:  # Receive vote for current term.
+                self.received_votes += 1
+            if self.received_votes >= len(Server.SERVER_PORTS) // 2 + 1:  # Received enough votes to become leader.
+                self.server_state = 'Leader'
+                become_leader = True
+                self.last_election_time = time.time()  # Update the last election time to avoid previous timeout watches. Don't start new timeout watch.
+
+        self.server_state_lock.release()
+        self.server_term_lock.release()
+        self.received_votes_lock.release()
+        self.last_election_time_lock.release()
+
+        if become_leader:
+            start_new_thread(self.threaded_become_leader, ())
+
     def threaded_on_receive_vote(self, connection):
         # Receive and process the vote request/response messages.
 
         header, sender, receiver, message = utils.receive_message(connection)
 
         if header == 'Vote-Request':
-            self.server_term_lock.acquire()
-            self.server_state_lock.acquire()
-            self.voted_candidate_lock.acquire()
-            self.blockchain_lock.acquire()
-
-            # Update term.
-            if message['term'] > self.server_term:
-                self.server_term = message['term']
-                self.server_state = 'Follower'
-                self.voted_candidate = None
-
-            # Decide whether to cast vote.
-            if message['term'] == self.server_term \
-                    and self.voted_candidate in {None, message['candidate_id']} \
-                    and not \
-                    (self.blockchain[-1]['term'] > message['last_log_term']
-                     or (self.blockchain[-1]['term'] == message['last_log_term'] and len(self.blockchain) - 1 > message['last_log_index'])):
-
-                vote = True
-                self.voted_candidate = message['candidate_id']
-
-            else:
-                vote = False
-            msg = self.generate_vote_response_message(message['candidate_id'], vote)
-
-            self.server_term_lock.release()
-            self.server_state_lock.release()
-            self.voted_candidate_lock.release()
-            self.blockchain_lock.release()
-
-            # Send message and reset election timeout if vote.
-            start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
-            if vote:
-                start_new_thread(self.threaded_leader_election_watch, ())
-
-        if header == 'Vote-Response':
-            self.server_state_lock.acquire()
-            self.server_term_lock.acquire()
-            self.received_votes_lock.acquire()
-            self.last_election_time_lock.acquire()
-
-            become_leader = False
-
-            if message['term'] > self.server_term:  # Discover higher term.
-                self.server_term = message['term']
-                self.server_state = 'Follower'
-
-            if self.server_state == 'Candidate':  # Hasn't stepped down yet.
-                if message['vote'] and message['term'] == self.server_term:  # Receive vote for current term.
-                    self.received_votes += 1
-                # TODO: check here, it should be >=
-                if self.received_votes > len(Server.SERVER_PORTS) // 2 + 1:  # Received enough votes to become leader.
-                    self.server_state = 'Leader'
-                    become_leader = True
-                    self.last_election_time = time.time()  # Update the last election time to avoid previous timeout watches. Don't start new timeout watch.
-
-            self.server_state_lock.release()
-            self.server_term_lock.release()
-            self.received_votes_lock.release()
-            self.last_election_time_lock.release()
-
-            if become_leader:
-                start_new_thread(self.threaded_become_leader, ())
+            self.on_receive_vote_request(message)
+        elif header == 'Operation-Response':
+            self.on_receive_vote_response(message)
+        else:
+            raise NotImplementedError(f'Header {header} is not related!')
 
     def start_vote_listener(self):
         # Start listener for vote messages.
@@ -453,7 +472,10 @@ class Server:
     def start_client_listener(self):
         # Start listener for client messages.
 
-        pass
+        self.sockets[0].listen(Server.MAX_CONNECTION)
+        while True:
+            connection, (ip, port) = self.sockets[0].accept()
+            start_new_thread(self.threaded_on_receive_operation, (connection,))
 
     def start(self):
         # Start the listeners for messages and timeout watches.

@@ -91,11 +91,12 @@ class Client:
         try:
             action = input('Receiver;Amount of Transaction (use a;b format ) or Balance?. \n')
             receiver, amount = tuple(action.split(';'))
-            if int(receiver) == int(sender):
+            receiver, amount = int(receiver), int(amount)
+            if receiver == sender:
                 print('You cannot send transactions to yourself!')
                 return -1
-            elif int(receiver) in {0, 1, 2} - {sender}:
-                return f'{sender} {receiver} {amount}'
+            elif receiver in set(Client.CLIENT_PORTS.keys()) - {sender}:
+                return sender, receiver, amount
             else:
                 print('No receiver found!')
                 return -1
@@ -114,7 +115,7 @@ class Client:
                     if transaction == -1:
                         transaction = None
                 elif action == '2':  # Balance
-                    transaction = str(self.client_id)
+                    transaction = self.client_id
                 else:  # Exit
                     transaction = None
                     done = True
