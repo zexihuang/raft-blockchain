@@ -37,20 +37,43 @@ class Client:
         self.leader_id_guess = self.client_id
         self.leader_id_guess_lock = Lock()
 
-    def generate_client_request_message(self, transaction):
+        self.transaction_receipts = set()
+        self.transaction_receipts_lock = Lock()
+
+    def generate_client_request_message(self, transaction_id, transaction):
         header = 'Client-Request'
         sender = self.client_id
 
         self.leader_id_guess_lock.acquire()
         receiver = self.leader_id_guess
         self.leader_id_guess_lock.release()
+        message = {
+            'id': transaction_id,
+            'transaction': transaction,
+        }
 
-        return header, sender, receiver, transaction
+        return header, sender, receiver, message
 
     def threaded_send_client_request(self, transaction):
         # Send the transaction request to the blockchain.
-        msg = self.generate_client_request_message(transaction)
+        transaction_id = time.time()
+        msg = self.generate_client_request_message(transaction_id, transaction)
         start_new_thread(utils.send_message, (msg, Client.CHANNEL_PORT))
+        start_new_thread(self.threaded_response_watch, (transaction_id, msg))
+
+    def threaded_response_watch(self, transaction_id, msg):
+        # Resend request if the response for a certain transaction msg timeout.
+
+        timeout = random.uniform(5.0, 10.0)
+        time.sleep(timeout)
+        self.transaction_receipts_lock.acquire()
+        if transaction_id not in self.transaction_receipts:  # Resend request and restart timeout.
+            start_new_thread(utils.send_message, (msg, Client.CHANNEL_PORT))
+            start_new_thread(self.threaded_response_watch, (transaction_id, msg))
+        else:  # Garbage collection since the transaction_id will never be checked again.
+            self.transaction_receipts.remove(transaction_id)
+
+        self.transaction_receipts_lock.release()
 
     def threaded_on_receive_client_response(self, connection):
         # Inform the user of the transaction feedback.
@@ -58,12 +81,23 @@ class Client:
         header, sender, receiver, message = utils.receive_message(connection)
 
         self.leader_id_guess_lock.acquire()
-        self.leader_id_guess = sender
-        self.leader_id_guess_lock.release()
+        self.transaction_receipts_lock.acquire()
 
-        # TODO: polish message,
-        # TODO: print out the message to the user (transaction X fail/succeed, your money is now Y).
-        print(message)
+        self.leader_id_guess = sender
+        self.transaction_receipts.add(message['id'])
+
+        self.leader_id_guess_lock.release()
+        self.transaction_receipts_lock.release()
+
+        transaction = message['transaction']
+        result = message['result']
+        if len(transaction) == 1:  # Balance transaction
+            print('Balance transaction successful')
+            print(f'Your ({transaction[0]}) balance is: {result[1]}\n')
+        else:  # Transfer transaction.
+            print(f'Transfer transaction from you ({transaction[0]}) to {transaction[1]} '
+                  f'{"successful" if result[0] else "unsuccessful"}.')
+            print(f'Your ({transaction[0]}) balance is: {result[1]}\n')
 
     def start_client_response_listener(self):
         # Start the listener for transaction feedback.
@@ -115,7 +149,7 @@ class Client:
                     if transaction == -1:
                         transaction = None
                 elif action == '2':  # Balance
-                    transaction = self.client_id
+                    transaction = (self.client_id, )
                 else:  # Exit
                     transaction = None
                     done = True

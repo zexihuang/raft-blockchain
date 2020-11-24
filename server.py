@@ -12,6 +12,7 @@ import copy
 import utils
 import math
 import hashlib
+from collections import deque
 
 
 class Server:
@@ -79,11 +80,18 @@ class Server:
         self.received_votes_lock = Lock()
 
         # State variables for client.
-        self.blockchain = []  # each block: {'term': ..., 'phash': ..., 'nonce': ..., 'transactions': [(A, B, 5), A, None]}
+        self.blockchain = []  # each block: {'term': ..., 'phash': ..., 'nonce': ...,
+        # 'transactions': ((unique_id, (A, B, 5)), (unique_id, (A)), None)}
         self.blockchain_lock = Lock()
 
         self.balance_table = []
         self.balance_table_lock = Lock()
+
+        self.transaction_queue = deque()
+        self.transaction_queue_lock = Lock()
+
+        self.transaction_ids = set()
+        self.transaction_ids_lock = Lock()
 
     # Operation utilities.
     def generate_operation_response_message(self, receiver, success):
@@ -350,7 +358,6 @@ class Server:
         }
         return header, sender, receiver, message
 
-# TODO: set current leader id to None if needed.
     def on_receive_vote_request(self, message):
         # Receive and process vote request.
 
@@ -439,12 +446,33 @@ class Server:
             connection, (ip, port) = self.sockets[1].accept()
             start_new_thread(self.threaded_on_receive_vote, (connection,))
 
-    # Blockchain and client message utilities.
+# Blockchain and client message utilities.
+    def generate_client_response_message(self, transaction_id, transaction, transaction_result):
+
+        header = 'Client-Response'
+        sender = self.server_id
+        receiver = transaction[0]
+        message = {
+            'id': transaction_id,
+            'transaction': transaction,
+            'result': transaction_result,
+        }
+
+        return header, sender, receiver, message
+
+    def threaded_send_client_response(self, transaction_id, transaction, transaction_result):
+        # Compose the response for client.
+        # transaction = (A, B, amt) or (A, ), transaction_result = (True/False, balance_of_A).
+
+        msg = self.generate_client_response_message(transaction_id, transaction, transaction_result)
+        start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+
     def threaded_commit_watch(self):
         # Inform the client if the transaction's block has been committed.
 
         # TODO: commit watch will check commit index variable, but we need to consider commit index variable can be larger
         # TODO: than the size of the blockchain, so it will pass.
+        # TODO: call threaded_send_client_response.
         pass
 
     def proof_of_work(self):
@@ -455,6 +483,7 @@ class Server:
             will_encode = "|".join(transactions) + "|" + nonce
             cur_pow = hashlib.sha3_256(will_encode.encode('utf-8')).hexdigest()
             if '2' > cur_pow[-1] > '0':
+                # TODO: please check the validity of the transaction before proof of work.
                 # TODO: PoW found, add blockchain
                 break
 
@@ -463,11 +492,29 @@ class Server:
     def threaded_on_receive_client(self, connection):
         # Receive transaction request from client.
 
-        # Relay the message to the current leader if self is not.
+        header, sender, receiver, message = utils.receive_message(connection)
+        if self.server_state == 'Leader':  # Process the request.
 
-        # Add the transaction to the transaction queue.
+            transaction_id = message['id']
+            transaction = message['transaction']
 
-        pass
+            self.transaction_ids_lock.acquire()
+            self.transaction_queue_lock.acquire()
+            if transaction_id not in self.transaction_ids:  # Transactions hasn't been processed yet.
+                self.transaction_ids.add(transaction_id)
+                self.transaction_queue.append((transaction_id, transaction))
+            self.transaction_ids_lock.release()
+            self.transaction_queue_lock.release()
+
+        else:  # Relay the client message to the current leader.
+            while True:
+                self.leader_id_lock.acquire()
+                if self.leader_id:  # Wait until a leader is elected.
+                    msg = (header, self.server_id, self.leader_id, message)
+                    start_new_thread(utils.send_message, (msg, server.CHANNEL_PORT))
+                    self.leader_id_lock.release()
+                    break
+                self.leader_id_lock.release()
 
     def start_client_listener(self):
         # Start listener for client messages.
