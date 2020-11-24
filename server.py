@@ -194,6 +194,8 @@ class Server:
             self.received_success += 1
 
             if self.received_success >= len(Server.SERVER_PORTS) // 2 + 1:  # Received enough success to commit.
+                # TODO: make sure that majority from current term, += 1 commit index is wrong
+                # TODO: commit blocks in between received local commit index -> commit
                 self.commit_index += 1
 
             self.commit_index_lock.release()
@@ -469,7 +471,7 @@ class Server:
 
     def threaded_commit_watch(self):
         # Inform the client if the transaction's block has been committed.
-
+        # TODO: there may be previous indexes haven't been committed.
         # TODO: commit watch will check commit index variable, but we need to consider commit index variable can be larger
         # TODO: than the size of the blockchain, so it will pass.
         # TODO: call threaded_send_client_response.
