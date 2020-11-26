@@ -1,5 +1,7 @@
 import socket
 import pickle
+import random
+import string
 
 BUFFER_SIZE = 65536
 
@@ -27,3 +29,13 @@ def receive_message(connection):
     connection.send(pickle.dumps('ACK'))
 
     return header, sender, receiver, message
+
+
+def generate_random_string_with_ending(length, ending):
+    found = False
+    s = ""
+    while not found:
+        s = ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
+        if s[-1] in ending:
+            found = True
+    return s

@@ -46,6 +46,7 @@ class Server:
         # Initialize blockchains, balance tables, proof of work working area, etc.
 
         # Server state.
+        print('Follower!')
         self.server_state = 'Follower'  # Follower, Leader, Candidate
         self.server_state_lock = Lock()
 
@@ -84,7 +85,7 @@ class Server:
         # 'transactions': ((unique_id, (A, B, 5)), (unique_id, (A)), None)}
         self.blockchain_lock = Lock()
 
-        self.balance_table = []
+        self.balance_table = [10, 10, 10]
         self.balance_table_lock = Lock()
 
         self.transaction_queue = deque()
@@ -148,6 +149,7 @@ class Server:
                 self.server_state_lock.acquire()
                 self.voted_candidate_lock.acquire()
 
+                print('Follower!')
                 self.server_state = 'Follower'
                 self.voted_candidate = None
 
@@ -209,6 +211,7 @@ class Server:
             term_change = True
             self.server_state_lock.acquire()
             self.voted_candidate_lock.acquire()
+            print('Follower!')
             self.server_state = 'Follower'
             self.voted_candidate = None
             self.voted_candidate_lock.release()
@@ -270,6 +273,7 @@ class Server:
         self.blockchain_lock.acquire()
         self.leader_id_lock.acquire()
 
+        print('Leader!')
         self.server_state = 'Leader'
         self.servers_log_next_index = 3 * [len(self.blockchain)]
         self.leader_id = self.server_id
@@ -332,6 +336,7 @@ class Server:
         self.received_votes_lock.acquire()
         self.leader_id_lock.acquire()
 
+        print('Candidate!')
         self.server_state = 'Candidate'
         self.server_term += 1
         self.voted_candidate = self.server_id
@@ -371,6 +376,7 @@ class Server:
         # Update term.
         if message['term'] > self.server_term:
             self.server_term = message['term']
+            print('Follower!')
             self.server_state = 'Follower'
             self.voted_candidate = None
 
@@ -410,12 +416,14 @@ class Server:
 
         if message['term'] > self.server_term:  # Discover higher term.
             self.server_term = message['term']
+            print('Follower!')
             self.server_state = 'Follower'
 
         if self.server_state == 'Candidate':  # Hasn't stepped down yet.
             if message['vote'] and message['term'] == self.server_term:  # Receive vote for current term.
                 self.received_votes += 1
             if self.received_votes >= len(Server.SERVER_PORTS) // 2 + 1:  # Received enough votes to become leader.
+                print('Leader!')
                 self.server_state = 'Leader'
                 become_leader = True
                 self.last_election_time = time.time()  # Update the last election time to avoid previous timeout watches. Don't start new timeout watch.
@@ -448,7 +456,7 @@ class Server:
             connection, (ip, port) = self.sockets[1].accept()
             start_new_thread(self.threaded_on_receive_vote, (connection,))
 
-# Blockchain and client message utilities.
+    # Blockchain and client message utilities.
     def generate_client_response_message(self, transaction_id, transaction, transaction_result):
 
         header = 'Client-Response'
@@ -469,27 +477,103 @@ class Server:
         msg = self.generate_client_response_message(transaction_id, transaction, transaction_result)
         start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
-    def threaded_commit_watch(self):
+    def threaded_commit_watch(self, transactions_ids, transactions, block_index):
+        # TODO: think about the edge case happening when previous majority haven't been committed...
         # Inform the client if the transaction's block has been committed.
-        # TODO: there may be previous indexes haven't been committed.
-        # TODO: commit watch will check commit index variable, but we need to consider commit index variable can be larger
-        # TODO: than the size of the blockchain, so it will pass.
-        # TODO: call threaded_send_client_response.
-        pass
+        sent = False
+        while not sent:
+            self.commit_index_lock.acquire()
+            if block_index <= self.commit_index:
+                self.blockchain_lock.acquire()
+                if self.commit_index < len(self.blockchain):
+                    self.blockchain_lock.release()
+                    for i, transactions_id in enumerate(transactions_ids):
+                        self.balance_table_lock.acquire()
+                        balance = self.balance_table[transactions[i][0]]
+                        self.balance_table_lock.release()
+                        start_new_thread(self.threaded_send_client_response,
+                                         (transactions_id, transactions[i], (True, balance)))
+                    sent = True
+            self.commit_index_lock.release()
+
+    def is_transaction_valid(self, transaction):
+        self.balance_table_lock.acquire()
+        if len(transaction) == 3 and self.balance_table[transaction[0]] < transaction[2]:
+            self.balance_table_lock.release()
+            return False
+        self.balance_table_lock.release()
+        return True
 
     def proof_of_work(self):
-        # Doing proof of work based on the queue of transactions.
-        while True:
-            transactions = ...  # transactions of block to be added to chain
-            nonce = ...  # random string with ending 0 or 1 or 2.
+        def get_hash(transactions, nonce):
             will_encode = "|".join(transactions) + "|" + nonce
-            cur_pow = hashlib.sha3_256(will_encode.encode('utf-8')).hexdigest()
-            if '2' > cur_pow[-1] > '0':
-                # TODO: please check the validity of the transaction before proof of work.
-                # TODO: PoW found, add blockchain
-                break
+            return hashlib.sha3_256(will_encode.encode('utf-8')).hexdigest()
 
-        # Once a block is added to the block chain, call commit watch and send append request.
+        # Doing proof of work based on the queue of transactions.
+        max_transaction_count = 3
+        while True:
+            self.transaction_queue_lock.acquire()
+            if len(self.transaction_queue) > 0:
+                so_far, index = 0, 0
+                transactions_ids, transactions = [], [None, None, None]
+                while so_far < max_transaction_count and len(self.transaction_queue) > index:
+                    transaction_id, transaction = self.transaction_queue[index]
+                    if self.is_transaction_valid(transaction):
+                        transactions_ids.append(transaction_id)
+                        transactions[so_far] = transaction
+                        so_far += 1
+                    else:
+                        # sending invalid transactions
+                        self.balance_table_lock.acquire()
+                        balance = self.balance_table[transaction[0]]
+                        self.balance_table_lock.release()
+                        start_new_thread(self.generate_client_response_message,
+                                         (transaction_id, transaction, (False, balance)))
+                    index += 1
+                self.transaction_queue_lock.release()
+
+                found = False
+                found_nonce = None
+                while found:
+                    nonce = utils.generate_random_string_with_ending(length=6, ending={'0', '1', '2'})
+                    cur_pow = get_hash(transactions, nonce)
+                    if '2' > cur_pow[-1] > '0':
+                        found_nonce = nonce
+                        found = True
+
+                # PoW is found...
+                self.blockchain_lock.acquire()
+                self.server_term_lock.acquire()
+
+                phash = None
+                if len(self.blockchain) > 0:
+                    previous_nonce = self.blockchain[-1]['nonce']
+                    previous_transactions = self.blockchain[-1]['transactions']
+                    phash = get_hash(previous_transactions, previous_nonce)
+
+                # added to the block chain
+                self.blockchain.append({
+                    'term': self.server_term,
+                    'phash': phash,
+                    'nonce': found_nonce,
+                    'transactions': transactions
+                })
+
+                block_index = len(self.blockchain) - 1
+
+                self.server_term_lock.release()
+                self.blockchain_lock.release()
+
+                # call commit watch
+                start_new_thread(self.threaded_commit_watch, (transactions_ids, transactions, block_index,))
+
+                # send append request
+                start_new_thread(self.threaded_send_append_request, (self.other_servers,))
+
+            else:
+                self.transaction_queue_lock.release()
+
+        # Once a block is , call commit watch and send append request.
 
     def threaded_on_receive_client(self, connection):
         # Receive transaction request from client.
@@ -529,7 +613,13 @@ class Server:
     def start(self):
         # Start the listeners for messages and timeout watches.
 
-        pass
+        start_new_thread(self.start_client_listener, ())
+        start_new_thread(self.start_vote_listener, ())
+        start_new_thread(self.start_operation_listener, ())
+        start_new_thread(self.threaded_leader_election_watch, ())
+
+        while 1:
+            pass
 
 
 if __name__ == '__main__':
