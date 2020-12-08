@@ -118,7 +118,7 @@ class Server:
 
         next_log_index = self.servers_log_next_index[receiver]
         previous_log_index = next_log_index - 1
-        previous_log_term = self.blockchain[previous_log_index]['term']
+        previous_log_term = self.blockchain[previous_log_index]['term'] if len(self.blockchain) > 0 else -1
         message = {
             'term': self.server_term,
             'leader_id': self.server_id,
@@ -137,6 +137,7 @@ class Server:
 
     def on_receive_operation_request(self, sender, message):
         self.server_term_lock.acquire()
+        print(message)
         if message['term'] < self.server_term:
             # reject message because term is smaller.
             msg = self.generate_operation_response_message(sender, success=False)
@@ -161,8 +162,10 @@ class Server:
             self.leader_id_lock.acquire()
             self.leader_id = message['leader_id']
             self.leader_id_lock.release()
+
             if len(message['entries']) == 0:  # heartbeat message
                 start_new_thread(self.threaded_leader_election_watch, ())
+                success = True
             else:  # append message
                 self.blockchain_lock.acquire()
 
@@ -170,10 +173,12 @@ class Server:
                 if len(self.blockchain) > prev_log_index and \
                         message['previous_log_term'] == self.blockchain[prev_log_index]['term']:  # matches update blockchain
                     self.blockchain = self.blockchain[:message['previous_log_index'] + 1] + message['entries']
+                    success = True
                 else:
-                    msg = self.generate_operation_response_message(sender, success=False)
-                    start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+                    success = False
                 self.blockchain_lock.release()
+            msg = self.generate_operation_response_message(sender, success=success)
+            start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
             # update commit index depends on given message
             self.commit_index_lock.acquire()
@@ -185,7 +190,7 @@ class Server:
         term = message['term']
         success = message['success']
         term_change = False
-
+        print(message)
         if success:
             self.servers_log_next_index_lock.acquire()
             self.blockchain_lock.acquire()
@@ -256,14 +261,14 @@ class Server:
 
         for receiver in receivers:
             msg = self.generate_operation_request_message(receiver)
-            start_new_thread(self.threaded_on_receive_operation, ())
+            # start_new_thread(self.threaded_on_receive_operation, ())
             start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
     def threaded_heartbeat(self):
         # Send normal operation heartbeats to the followers.
         for receiver in self.other_servers:
             msg = self.generate_operation_request_message(receiver, is_heartbeat=True)
-            start_new_thread(self.threaded_on_receive_operation, ())
+            # start_new_thread(self.threaded_on_receive_operation, ())
             start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
     def threaded_become_leader(self):
@@ -322,7 +327,7 @@ class Server:
             'candidate_id': self.server_id,
             'term': self.server_term,
             'last_log_index': len(self.blockchain) - 1,
-            'last_log_term': self.blockchain[-1]['term'],
+            'last_log_term': self.blockchain[-1]['term'] if len(self.blockchain) > 0 else -1,
         }
         return header, sender, receiver, message
 
@@ -381,11 +386,12 @@ class Server:
             self.voted_candidate = None
 
         # Decide whether to cast vote.
+        last_log_term = self.blockchain[-1]['term'] if len(self.blockchain) > 0 else -1
         if message['term'] == self.server_term \
                 and self.voted_candidate in {None, message['candidate_id']} \
                 and not \
-                (self.blockchain[-1]['term'] > message['last_log_term']
-                 or (self.blockchain[-1]['term'] == message['last_log_term'] and len(self.blockchain) - 1 > message['last_log_index'])):
+                (last_log_term > message['last_log_term']
+                 or (last_log_term == message['last_log_term'] and len(self.blockchain) - 1 > message['last_log_index'])):
 
             vote = True
             self.voted_candidate = message['candidate_id']
@@ -423,8 +429,6 @@ class Server:
             if message['vote'] and message['term'] == self.server_term:  # Receive vote for current term.
                 self.received_votes += 1
             if self.received_votes >= len(Server.SERVER_PORTS) // 2 + 1:  # Received enough votes to become leader.
-                print('Leader!')
-                self.server_state = 'Leader'
                 become_leader = True
                 self.last_election_time = time.time()  # Update the last election time to avoid previous timeout watches. Don't start new timeout watch.
 
@@ -443,7 +447,7 @@ class Server:
 
         if header == 'Vote-Request':
             self.on_receive_vote_request(message)
-        elif header == 'Operation-Response':
+        elif header == 'Vote-Response':
             self.on_receive_vote_response(message)
         else:
             raise NotImplementedError(f'Header {header} is not related!')
