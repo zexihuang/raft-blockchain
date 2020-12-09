@@ -26,8 +26,8 @@ class Server:
     MAX_CONNECTION = 100
     BUFFER_SIZE = 65536
 
-    LEADER_ELECTION_TIMEOUT = 10
-    MESSAGE_SENDING_TIMEOUT = 10
+    LEADER_ELECTION_TIMEOUT = 60
+    MESSAGE_SENDING_TIMEOUT = 30
 
     def __init__(self):
         # Get the server name.
@@ -245,7 +245,7 @@ class Server:
 
     def threaded_response_watch(self, receiver):
         # Watch whether we receive response for a specific normal operation message sent. If not, resend the message.
-        timeout = random.uniform(10.0, 20.0)
+        timeout = random.uniform(Server.MESSAGE_SENDING_TIMEOUT, Server.MESSAGE_SENDING_TIMEOUT*2)
         time.sleep(timeout)
         self.servers_operation_last_seen_lock.acquire()
         if time.time() - self.servers_operation_last_seen[receiver] > timeout:  # timed out, resend
@@ -312,7 +312,7 @@ class Server:
         self.last_election_time = time.time()
         self.last_election_time_lock.release()
 
-        timeout = random.uniform(5.0, 10.0)
+        timeout = random.uniform(Server.LEADER_ELECTION_TIMEOUT, Server.LEADER_ELECTION_TIMEOUT*2)
         time.sleep(timeout)
         self.last_election_time_lock.acquire()
         if time.time() - self.last_election_time >= timeout:
@@ -523,6 +523,7 @@ class Server:
                 while so_far < max_transaction_count and len(self.transaction_queue) > index:
                     transaction_id, transaction = self.transaction_queue[index]
                     if self.is_transaction_valid(transaction):
+                        # TODO: handle double spending in one block
                         transactions_ids.append(transaction_id)
                         transactions[so_far] = transaction
                         so_far += 1
