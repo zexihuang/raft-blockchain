@@ -9,6 +9,7 @@ BUFFER_SIZE = 65536
 def send_message(msg, port):
     # Setup socket for the user to be send
     s_temp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # TODO: try catch to if the server is working...
     s_temp.connect((socket.gethostname(), port))
 
     # encode and send message

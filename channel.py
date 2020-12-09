@@ -49,7 +49,6 @@ class Channel:
     def threaded_on_receive(self, connection):
         # Relay the message from the sender to the receiver.
 
-        Channel.network_delay()
         header, sender, receiver, message = utils.receive_message(connection)
 
         # Based on the header and network configuration, decides whether to relay the message.
@@ -64,6 +63,7 @@ class Channel:
             self.lock.release()
 
         if relay:
+            Channel.network_delay()
             if header == 'Client-Response':  # Receiver is a client.
                 receiver_port = Channel.CLIENT_PORTS[receiver]
             elif header in ('Client-Request', 'Client-Relay'):  # Receiver is the server's client listener port.
