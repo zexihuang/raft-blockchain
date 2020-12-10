@@ -46,8 +46,10 @@ class Server:
 
         # Initialize blockchains, balance tables, proof of work working area, etc.
 
+        # State file name
+        self.state_file_path = f'./state_server_{self.server_id}.pkl'
+
         # Server state.
-        print(f'Follower! Term: 0')
         self.server_state = 'Follower'  # Follower, Leader, Candidate
         self.server_state_lock = Lock()
 
@@ -94,6 +96,51 @@ class Server:
 
         self.transaction_ids = set()
         self.transaction_ids_lock = Lock()
+
+    # Save the state
+    def save_the_state(self):
+        # Lock the variables and save then unlock
+        self.server_state_lock.acquire()
+        self.leader_id_lock.acquire()
+        self.server_term_lock.acquire()
+        self.servers_operation_last_seen_lock.acquire()
+        self.servers_log_next_index_lock.acquire()
+        self.received_success_lock.acquire()
+        self.commit_index_lock.acquire()
+        self.last_election_time_lock.acquire()
+        self.voted_candidate_lock.acquire()
+        self.received_votes_lock.acquire()
+        self.blockchain_lock.acquire()
+        self.balance_table_lock.acquire()
+        self.transaction_queue_lock.acquire()
+        self.transaction_ids_lock.acquire()
+
+        with open(self.state_file_path, 'wb') as _file:
+            pickle.dump(self.__dict__, _file, 2)
+
+        self.server_state_lock.release()
+        self.leader_id_lock.release()
+        self.server_term_lock.release()
+        self.servers_operation_last_seen_lock.release()
+        self.servers_log_next_index_lock.release()
+        self.received_success_lock.release()
+        self.commit_index_lock.release()
+        self.last_election_time_lock.release()
+        self.voted_candidate_lock.release()
+        self.received_votes_lock.release()
+        self.blockchain_lock.release()
+        self.balance_table_lock.release()
+        self.transaction_queue_lock.release()
+        self.transaction_ids_lock.release()
+
+    # Load the state
+    def load_the_state(self):
+        if os.path.exists(self.state_file_path):
+            with open(self.state_file_path, 'rb') as _file:
+                tmp_dict = pickle.load(_file)
+            self.__dict__.update(tmp_dict)
+            return True
+        return False
 
     # Operation utilities.
     def generate_operation_response_message(self, receiver, success):
@@ -631,10 +678,16 @@ class Server:
     def start(self):
         # Start the listeners for messages and timeout watches.
 
-        start_new_thread(self.start_client_listener, ())
-        start_new_thread(self.start_vote_listener, ())
-        start_new_thread(self.start_operation_listener, ())
-        start_new_thread(self.threaded_leader_election_watch, ())
+        # TODO: after loading, what shhould we do?
+        result = self.load_the_state()
+        if result is True:
+            # There is a previous state, we need to start threads based on those?
+            pass
+        else:
+            start_new_thread(self.start_client_listener, ())
+            start_new_thread(self.start_vote_listener, ())
+            start_new_thread(self.start_operation_listener, ())
+            start_new_thread(self.threaded_leader_election_watch, ())
 
         while 1:
             pass

@@ -13,7 +13,6 @@ import utils
 
 
 class Channel:
-
     MAX_CONNECTION = 100
     BUFFER_SIZE = 65536
 
@@ -73,7 +72,11 @@ class Channel:
             else:  # Receiver is the server's operation listener port.
                 receiver_port = Channel.SERVER_PORTS[receiver][2]
 
-            utils.send_message((header, sender, receiver, message), receiver_port)
+            try:
+                utils.send_message((header, sender, receiver, message), receiver_port)
+            except Exception as e:
+                # TODO: we may create error.log and print them this instead of console.
+                print(f"Server problem: {e}")
 
     def start_message_listener(self):
         # Start the message listener for all incoming messages.
@@ -81,7 +84,7 @@ class Channel:
         self.socket.listen(Channel.MAX_CONNECTION)
         while True:
             connection, (ip, port) = self.socket.accept()
-            start_new_thread(self.threaded_on_receive, (connection, ))
+            start_new_thread(self.threaded_on_receive, (connection,))
 
     @staticmethod
     def get_partition_config():
