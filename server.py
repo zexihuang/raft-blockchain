@@ -661,11 +661,10 @@ class Server:
                     self.commit_watches_lock.release()
                     start_new_thread(self.threaded_commit_watch, (transactions_ids, transactions, block_index,))
                 self.server_state_lock.release()
-
             else:
                 self.transaction_queue_lock.release()
-
-        # Once a block is , call commit watch and send append request.
+            self.server_state_lock.acquire()
+        self.server_state_lock.release()
 
     def threaded_on_receive_client(self, connection):
         # Receive transaction request from client.
@@ -712,7 +711,7 @@ class Server:
         threads = [(self.start_client_listener, ()), (self.start_vote_listener, ()), (self.start_operation_listener, ())]
         if self.server_state in ('Follower', 'Candidate'):
             threads.append((self.threaded_leader_election_watch, ()))
-        else: # Leader.
+        else:  # Leader.
             threads.append((self.threaded_send_heartbeat, ()))
             for commit_watch in self.commit_watches:
                 threads.append((self.threaded_commit_watch, commit_watch))
