@@ -97,6 +97,9 @@ class Server:
         self.transaction_ids = set()
         self.transaction_ids_lock = Lock()
 
+        self.commit_watches = set()
+        self.commit_watches_lock = Lock()
+
     # Save the state
     def save_the_state(self):
         # Lock the variables and save then unlock
@@ -114,6 +117,7 @@ class Server:
         self.balance_table_lock.acquire()
         self.transaction_queue_lock.acquire()
         self.transaction_ids_lock.acquire()
+        self.commit_watches_lock.acquire()
 
         with open(self.state_file_path, 'wb') as _file:
             pickle.dump(self.__dict__, _file, 2)
@@ -132,6 +136,7 @@ class Server:
         self.balance_table_lock.release()
         self.transaction_queue_lock.release()
         self.transaction_ids_lock.release()
+        self.commit_watches_lock.release()
 
     # Load the state
     def load_the_state(self):
@@ -322,6 +327,21 @@ class Server:
     #         # start_new_thread(self.threaded_on_receive_operation, ())
     #         start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
+    def threaded_send_heartbeat(self):
+
+        self.server_state_lock.acquire()
+        while self.server_state == 'Leader':
+            # heartbeat broadcast
+            for receiver in self.other_servers:
+                msg = self.generate_operation_request_message(receiver, is_heartbeat=True)
+                # start_new_thread(self.threaded_on_receive_operation, ())
+                start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+            self.server_state_lock.release()
+            time.sleep(Server.HEARTBEAT_TIMEOUT)
+            self.server_state_lock.acquire()
+        print('Step down from leader. Heartbeat stops. ')
+        self.server_state_lock.release()
+
     def threaded_become_leader(self):
         # Initialize the next index, last log index, send the first heartbeat.
         self.server_state_lock.acquire()
@@ -341,18 +361,8 @@ class Server:
         self.server_state_lock.release()
         self.leader_id_lock.release()
 
-        self.server_state_lock.acquire()
-        while self.server_state == 'Leader':
-            # heartbeat broadcast
-            for receiver in self.other_servers:
-                msg = self.generate_operation_request_message(receiver, is_heartbeat=True)
-                # start_new_thread(self.threaded_on_receive_operation, ())
-                start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
-            self.server_state_lock.release()
-            time.sleep(Server.HEARTBEAT_TIMEOUT)
-            self.server_state_lock.acquire()
-        print('No leader anymore...')
-        self.server_state_lock.release()
+        start_new_thread(self.threaded_send_heartbeat, ())
+        start_new_thread(self.threaded_proof_of_work, ())
 
     def start_operation_listener(self):
         # Start listener for operation messages.
@@ -543,9 +553,11 @@ class Server:
 
     def threaded_commit_watch(self, transactions_ids, transactions, block_index):
         # TODO: think about the edge case happening when previous majority haven't been committed...
+        # TODO: commit watch should also stop if the server is no longer the leader.
         # Inform the client if the transaction's block has been committed.
         sent = False
-        while not sent:
+        self.server_state_lock.acquire()
+        while not sent and self.server_state == 'Leader':
             self.commit_index_lock.acquire()
             if block_index <= self.commit_index:
                 self.blockchain_lock.acquire()
@@ -559,6 +571,13 @@ class Server:
                                          (transactions_id, transactions[i], (True, balance)))
                     sent = True
             self.commit_index_lock.release()
+            self.server_state_lock.release()
+            self.server_state_lock.acquire()
+        self.server_state_lock.release()
+        # Remove the commit watch from the commit watch list.
+        self.commit_watches_lock.acquire()
+        self.commit_watches.remove((transactions_ids, transactions, block_index))
+        self.commit_watches_lock.release()
 
     def is_transaction_valid(self, transaction):
         self.balance_table_lock.acquire()
@@ -568,14 +587,16 @@ class Server:
         self.balance_table_lock.release()
         return True
 
-    def proof_of_work(self):
+    def threaded_proof_of_work(self):
         def get_hash(transactions, nonce):
             will_encode = "|".join(transactions) + "|" + nonce
             return hashlib.sha3_256(will_encode.encode('utf-8')).hexdigest()
 
         # Doing proof of work based on the queue of transactions.
         max_transaction_count = 3
-        while True:
+        self.server_state_lock.acquire()
+        while self.server_state == 'Leader':
+            self.server_state_lock.release()
             self.transaction_queue_lock.acquire()
             if len(self.transaction_queue) > 0:
                 so_far, index = 0, 0
@@ -607,33 +628,39 @@ class Server:
                         found = True
 
                 # PoW is found...
-                self.blockchain_lock.acquire()
-                self.server_term_lock.acquire()
+                self.server_state_lock.acquire()
+                if self.server_state == 'Leader':  # Still leader. Append block, start commit watch and send append request.
+                    self.blockchain_lock.acquire()
+                    self.server_term_lock.acquire()
 
-                phash = None
-                if len(self.blockchain) > 0:
-                    previous_nonce = self.blockchain[-1]['nonce']
-                    previous_transactions = self.blockchain[-1]['transactions']
-                    phash = get_hash(previous_transactions, previous_nonce)
+                    phash = None
+                    if len(self.blockchain) > 0:
+                        previous_nonce = self.blockchain[-1]['nonce']
+                        previous_transactions = self.blockchain[-1]['transactions']
+                        phash = get_hash(previous_transactions, previous_nonce)
 
-                # added to the block chain
-                self.blockchain.append({
-                    'term': self.server_term,
-                    'phash': phash,
-                    'nonce': found_nonce,
-                    'transactions': transactions
-                })
+                    # added to the block chain
+                    self.blockchain.append({
+                        'term': self.server_term,
+                        'phash': phash,
+                        'nonce': found_nonce,
+                        'transactions': transactions
+                    })
 
-                block_index = len(self.blockchain) - 1
+                    block_index = len(self.blockchain) - 1
 
-                self.server_term_lock.release()
-                self.blockchain_lock.release()
+                    self.server_term_lock.release()
+                    self.blockchain_lock.release()
 
-                # call commit watch
-                start_new_thread(self.threaded_commit_watch, (transactions_ids, transactions, block_index,))
+                    # send append request
+                    self.threaded_send_append_request(self.other_servers)
 
-                # send append request
-                start_new_thread(self.threaded_send_append_request, (self.other_servers,))
+                    # call commit watch
+                    self.commit_watches_lock.acquire()
+                    self.commit_watches.add((tuple(transactions_ids), tuple(transactions), block_index))
+                    self.commit_watches_lock.release()
+                    start_new_thread(self.threaded_commit_watch, (transactions_ids, transactions, block_index,))
+                self.server_state_lock.release()
 
             else:
                 self.transaction_queue_lock.release()
@@ -678,16 +705,19 @@ class Server:
     def start(self):
         # Start the listeners for messages and timeout watches.
 
-        # TODO: after loading, what shhould we do?
+        # Load the state, if any.
         result = self.load_the_state()
-        if result is True:
-            # There is a previous state, we need to start threads based on those?
-            pass
-        else:
-            start_new_thread(self.start_client_listener, ())
-            start_new_thread(self.start_vote_listener, ())
-            start_new_thread(self.start_operation_listener, ())
-            start_new_thread(self.threaded_leader_election_watch, ())
+
+        # Start/Resume operations based on the server state.
+        threads = [(self.start_client_listener, ()), (self.start_vote_listener, ()), (self.start_operation_listener, ())]
+        if self.server_state in ('Follower', 'Candidate'):
+            threads.append((self.threaded_leader_election_watch, ()))
+        else: # Leader.
+            threads.append((self.threaded_send_heartbeat, ()))
+            for commit_watch in self.commit_watches:
+                threads.append((self.threaded_commit_watch, commit_watch))
+        for (thread, args) in threads:
+            start_new_thread(thread, args)
 
         while 1:
             pass

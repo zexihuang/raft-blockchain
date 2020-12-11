@@ -45,6 +45,17 @@ class Channel:
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.bind((socket.gethostname(), self.port))
 
+        # Set up loggers.
+        log_file = f'channel.log'
+        if os.path.exists(log_file):
+            os.remove(log_file)
+        self.logger = logging.getLogger('Channel')
+        file_handler = logging.FileHandler(log_file)
+        formatter = logging.Formatter('%(asctime)s %(message)s', "%H:%M:%S")
+        file_handler.setFormatter(formatter)
+        self.logger.addHandler(file_handler)
+        self.logger.setLevel(logging.INFO)
+
     def threaded_on_receive(self, connection):
         # Relay the message from the sender to the receiver.
 
@@ -75,8 +86,7 @@ class Channel:
             try:
                 utils.send_message((header, sender, receiver, message), receiver_port)
             except Exception as e:
-                # TODO: we may create error.log and print them this instead of console.
-                print(f"Server problem: {e}")
+                self.logger.info(e)
 
     def start_message_listener(self):
         # Start the message listener for all incoming messages.
