@@ -30,6 +30,8 @@ class Server:
     MESSAGE_SENDING_TIMEOUT = 10
     HEARTBEAT_TIMEOUT = 1
 
+    MAX_TRANSACTION_COUNT = 3
+
     def __init__(self):
         # Get the server name.
         while True:
@@ -605,47 +607,44 @@ class Server:
     def threaded_proof_of_work(self):
 
         # Doing proof of work based on the queue of transactions.
-        max_transaction_count = 3
+        transactions_ids = []
+        transactions = []
+        nouce = None
+        found = False
+        estimated_balance_table = self.get_estimate_balance_table()
+
         self.server_state_lock.acquire()
         while self.server_state == 'Leader':
             self.server_state_lock.release()
+
+            # Add new transactions to current proof of work.
             self.transaction_queue_lock.acquire()
+            while len(transactions) < Server.MAX_TRANSACTION_COUNT and len(self.transaction_queue) > 0:
+                transaction_id, transaction = self.transaction_queue.popleft()
+                if Server.is_transaction_valid(self, estimated_balance_table, transactions, transaction): # Transaction valid
+                    transactions.append(transaction)
+                    transactions_ids.append(transaction_id)
+                else: # Transaction invalid.
+                    self.balance_table_lock.acquire()
+                    balance = self.balance_table[transaction[0]]
+                    self.balance_table_lock.release()
+                    start_new_thread(self.generate_client_response_message,
+                                     (transaction_id, transaction, (False, balance)))
+            self.transaction_queue_lock.release()
 
-            estimated_balance_table = self.get_estimate_balance_table()
+            # Do proof of work if transactions are not empty.
+            if len(transactions) > 0:
+                nonce = utils.generate_random_string_with_ending(length=6, ending={'0', '1', '2'})
+                cur_pow = Server.get_hash(transactions, nonce)
+                if '2' > cur_pow[-1] > '0':
+                    found = True
 
-            if len(self.transaction_queue) > 0:
-                so_far, index = 0, 0
-                transactions_ids, transactions = [], [None, None, None]
-                while so_far < max_transaction_count and len(self.transaction_queue) > index:
-                    transaction_id, transaction = self.transaction_queue[index]
-                    if self.is_transaction_valid(transaction):
-                        # TODO: handle double spending in one block
-                        transactions_ids.append(transaction_id)
-                        transactions[so_far] = transaction
-                        so_far += 1
-                    else:
-                        # sending invalid transactions
-                        self.balance_table_lock.acquire()
-                        balance = self.balance_table[transaction[0]]
-                        self.balance_table_lock.release()
-                        start_new_thread(self.generate_client_response_message,
-                                         (transaction_id, transaction, (False, balance)))
-                    index += 1
-                self.transaction_queue_lock.release()
-
-                found = False
-                found_nonce = None
-                while found:
-                    nonce = utils.generate_random_string_with_ending(length=6, ending={'0', '1', '2'})
-                    cur_pow = Server.get_hash(transactions, nonce)
-                    if '2' > cur_pow[-1] > '0':
-                        found_nonce = nonce
-                        found = True
-
-                # PoW is found...
+            # If PoW is found:
+            if found:
                 self.server_state_lock.acquire()
-                self.transaction_queue_lock.acquire()
-                if self.server_state == 'Leader':  # Still leader. Append block, start commit watch and send append request.
+                if self.server_state == 'Leader':
+
+                    # Update the blockchain.
                     self.blockchain_lock.acquire()
                     self.server_term_lock.acquire()
 
@@ -655,38 +654,37 @@ class Server:
                         previous_transactions = self.blockchain[-1]['transactions']
                         phash = Server.get_hash(previous_transactions, previous_nonce)
 
-                    for _ in range(len(transactions_ids)):
-                        self.transaction_queue.popleft()
-
-                    # added to the block chain
                     self.blockchain.append({
                         'term': self.server_term,
                         'phash': phash,
-                        'nonce': found_nonce,
+                        'nonce': nouce,
                         'transactions': transactions
                     })
 
                     block_index = len(self.blockchain) - 1
 
-                    self.server_term_lock.release()
-                    self.blockchain_lock.release()
-
-                    # send append request
+                    # Send append request.
                     self.threaded_send_append_request(self.other_servers)
 
-                    # call commit watch
+                    # Call commit watch.
                     self.commit_watches_lock.acquire()
                     self.commit_watches.add((tuple(transactions_ids), tuple(transactions), block_index))
                     self.commit_watches_lock.release()
                     start_new_thread(self.threaded_commit_watch, (transactions_ids, transactions, block_index,))
+
+                    # Reset proof of work variables.
+                    transactions_ids = []
+                    transactions = []
+                    nouce = None
+                    found = False
+                    estimated_balance_table = self.get_estimate_balance_table()
+
+                    self.blockchain_lock.release()
+                    self.server_term_lock.release()
                 self.server_state_lock.release()
-                self.transaction_queue_lock.release()
-            else:
-                self.transaction_queue_lock.release()
+
             self.server_state_lock.acquire()
         self.server_state_lock.release()
-
-        # TODO: transaction queue remove
 
     def threaded_on_receive_client(self, connection):
         # Receive transaction request from client.
@@ -735,6 +733,7 @@ class Server:
             threads.append((self.threaded_leader_election_watch, ()))
         else:  # Leader.
             threads.append((self.threaded_send_heartbeat, ()))
+            threads.append((self.threaded_proof_of_work, ()))
             for commit_watch in self.commit_watches:
                 threads.append((self.threaded_commit_watch, commit_watch))
         for (thread, args) in threads:
