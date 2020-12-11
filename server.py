@@ -69,8 +69,8 @@ class Server:
         self.servers_log_next_index = [0, 0, 0]
         self.servers_log_next_index_lock = Lock()
 
-        self.received_success = 0
-        self.received_success_lock = Lock()
+        self.accept_indexes = [-1, -1, -1]
+        self.accept_indexes_lock = Lock()
 
         self.commit_index = -1
         self.commit_index_lock = Lock()
@@ -87,7 +87,7 @@ class Server:
 
         # State variables for client.
         self.blockchain = []  # each block: {'term': ..., 'phash': ..., 'nonce': ...,
-        # 'transactions': ((unique_id, (A, B, 5)), (unique_id, (A)), None)}
+        # 'transactions': ((A, B, 5), (A,), None)}
         self.blockchain_lock = Lock()
 
         self.balance_table = [10, 10, 10]
@@ -110,7 +110,7 @@ class Server:
         self.server_term_lock.acquire()
         self.servers_operation_last_seen_lock.acquire()
         self.servers_log_next_index_lock.acquire()
-        self.received_success_lock.acquire()
+        self.accept_indexes_lock.acquire()
         self.commit_index_lock.acquire()
         self.last_election_time_lock.acquire()
         self.voted_candidate_lock.acquire()
@@ -129,7 +129,7 @@ class Server:
         self.server_term_lock.release()
         self.servers_operation_last_seen_lock.release()
         self.servers_log_next_index_lock.release()
-        self.received_success_lock.release()
+        self.accept_indexes_lock.release()
         self.commit_index_lock.release()
         self.last_election_time_lock.release()
         self.voted_candidate_lock.release()
@@ -150,13 +150,14 @@ class Server:
         return False
 
     # Operation utilities.
-    def generate_operation_response_message(self, receiver, success):
+    def generate_operation_response_message(self, receiver, last_log_index_after_append, success):
         # server_term is already locked here...
         header = 'Operation-Response'
         sender = self.server_id
 
         message = {
             'term': self.server_term,
+            'last_log_index_after_append': last_log_index_after_append,
             'success': success
         }
 
@@ -173,7 +174,7 @@ class Server:
 
         next_log_index = self.servers_log_next_index[receiver]
         previous_log_index = next_log_index - 1
-        previous_log_term = self.blockchain[previous_log_index]['term'] if len(self.blockchain) > 0 else -1
+        previous_log_term = self.blockchain[previous_log_index]['term'] if len(self.blockchain) > 0 and previous_log_index > -1 else -1
 
         message = {
             'term': self.server_term,
@@ -200,7 +201,7 @@ class Server:
         print(message)
         if message['term'] < self.server_term:
             # reject message because term is smaller.
-            msg = self.generate_operation_response_message(sender, success=False)
+            msg = self.generate_operation_response_message(sender, None, success=False)
             start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
         else:  # message['term'] >= self.server_term:
             # saw bigger term from another process, step down, and continue
@@ -216,16 +217,25 @@ class Server:
 
             if len(message['entries']) > 0:  # append message
                 self.blockchain_lock.acquire()
-
+                print(f'Blockchain before: {self.blockchain}')
                 prev_log_index = message['previous_log_index']
-                if len(self.blockchain) > prev_log_index and \
-                        message['previous_log_term'] == self.blockchain[prev_log_index]['term']:  # matches update blockchain
-                    self.blockchain = self.blockchain[:message['previous_log_index'] + 1] + message['entries']
+                if prev_log_index == -1 or \
+                        (len(self.blockchain) > prev_log_index and
+                         message['previous_log_term'] == self.blockchain[prev_log_index]['term']):  # matches update blockchain
+                    # Overwrite any new entries
+                    for i, entry in enumerate(message['entries']):
+                        if len(self.blockchain) < prev_log_index + i + 2:
+                            self.blockchain.append(entry)
+                        elif entry['term'] != self.blockchain[prev_log_index + i + 1]['term']:
+                            self.blockchain = self.blockchain[:prev_log_index + i + 1]
+                            self.blockchain.append(entry)
                     success = True
                 else:
                     success = False
+                print(f'Blockchain after: {self.blockchain}')
+                last_log_index_after_append = len(self.blockchain) - 1
                 self.blockchain_lock.release()
-                msg = self.generate_operation_response_message(sender, success=success)
+                msg = self.generate_operation_response_message(sender, last_log_index_after_append, success=success)
                 start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
             start_new_thread(self.threaded_leader_election_watch, ())
@@ -241,25 +251,31 @@ class Server:
 
     def on_receive_operation_response(self, sender, message):
         term = message['term']
+        last_log_index_after_append = message['last_log_index_after_append']
         success = message['success']
         print(message)
         if success:
             self.servers_log_next_index_lock.acquire()
+            self.server_term_lock.acquire()
             self.blockchain_lock.acquire()
-            self.received_success_lock.acquire()
+            self.accept_indexes_lock.acquire()
             self.commit_index_lock.acquire()
 
-            self.servers_log_next_index[sender] = len(self.blockchain)
-            self.received_success += 1
+            if self.accept_indexes[sender] < last_log_index_after_append:
+                self.accept_indexes[sender] = last_log_index_after_append
 
-            if self.received_success >= len(Server.SERVER_PORTS) // 2 + 1:  # Received enough success to commit.
-                # TODO: make sure that majority from current term, += 1 commit index is wrong
-                # TODO: commit blocks in between received local commit index -> commit
-                self.commit_index += 1
+                sorted_accept_indexes = sorted(self.accept_indexes)
+
+                target_accept_index = sorted_accept_indexes[int((len(sorted_accept_indexes) - 1) / 2)]
+                if self.blockchain[target_accept_index]['term'] == self.server_term:
+                    self.commit_index = target_accept_index
+
+            self.servers_log_next_index[sender] = len(self.blockchain)
 
             self.commit_index_lock.release()
-            self.received_success_lock.release()
+            self.accept_indexes_lock.release()
             self.blockchain_lock.release()
+            self.server_term_lock.release()
             self.servers_log_next_index_lock.release()
 
         self.server_term_lock.acquire()
@@ -313,14 +329,13 @@ class Server:
 
     def threaded_send_append_request(self, receivers):
         # Send append requests to followers.
-        self.received_success_lock.acquire()
-        self.received_success = 1 if self.received_success == 0 else self.received_success
-        self.received_success_lock.release()
-
-        for receiver in receivers:
-            msg = self.generate_operation_request_message(receiver)
-            # start_new_thread(self.threaded_on_receive_operation, ())
-            start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+        self.server_state_lock.acquire()
+        if self.server_state == 'Leader':
+            for receiver in receivers:
+                msg = self.generate_operation_request_message(receiver)
+                # start_new_thread(self.threaded_on_receive_operation, ())
+                start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+        self.server_state_lock.release()
 
     # def threaded_heartbeat(self):
     #     # Send normal operation heartbeats to the followers.
@@ -561,8 +576,6 @@ class Server:
         start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
     def threaded_commit_watch(self, transactions_ids, transactions, block_index):
-        # TODO: think about the edge case happening when previous majority haven't been committed...
-        # TODO: commit watch should also stop if the server is no longer the leader.
         # Inform the client if the transaction's block has been committed.
         sent = False
         self.server_state_lock.acquire()
@@ -582,6 +595,12 @@ class Server:
             self.commit_index_lock.release()
             self.server_state_lock.release()
             self.server_state_lock.acquire()
+        if sent:
+            self.blockchain_lock.acquire()
+            self.commit_index_lock.acquire()
+            print(f'BC: {self.blockchain}, CI: {self.commit_index}')
+            self.commit_index_lock.release()
+            self.blockchain_lock.release()
         self.server_state_lock.release()
         # Remove the commit watch from the commit watch list.
         self.commit_watches_lock.acquire()
@@ -611,8 +630,8 @@ class Server:
         def get_balance_table_change(blockchain, start_index):
             table_diff = [0, 0, 0]
             for block in blockchain[start_index:]:
-                for t_id, transaction in block['transactions']:
-                    if len(transaction) == 3:  # transfer transaction
+                for transaction in block['transactions']:
+                    if transaction is not None and len(transaction) == 3:  # transfer transaction
                         sender, receiver, amount = transaction
                         table_diff[sender] -= amount
                         table_diff[receiver] += amount
@@ -676,7 +695,7 @@ class Server:
             if len(transactions) > 0:
                 nonce = utils.generate_random_string_with_ending(length=6, ending={'0', '1', '2'})
                 cur_pow = Server.get_hash(transactions, nonce)
-                if '2' > cur_pow[-1] > '0':
+                if '2' >= cur_pow[-1] >= '0':
                     found = True
 
             # If PoW is found:
@@ -687,6 +706,7 @@ class Server:
                     # Update the blockchain.
                     self.blockchain_lock.acquire()
                     self.server_term_lock.acquire()
+                    self.accept_indexes_lock.acquire()
 
                     phash = None
                     if len(self.blockchain) > 0:
@@ -701,10 +721,12 @@ class Server:
                         'transactions': transactions
                     })
 
+                    self.accept_indexes[self.server_id] = len(self.blockchain) - 1
+
                     block_index = len(self.blockchain) - 1
 
                     # Send append request.
-                    self.threaded_send_append_request(self.other_servers)
+                    start_new_thread(self.threaded_send_append_request, (self.other_servers,))
 
                     # Call commit watch.
                     self.commit_watches_lock.acquire()
@@ -712,6 +734,7 @@ class Server:
                     self.commit_watches_lock.release()
                     start_new_thread(self.threaded_commit_watch, (transactions_ids, transactions, block_index,))
 
+                    self.accept_indexes_lock.release()
                     self.blockchain_lock.release()
                     self.server_term_lock.release()
 
@@ -721,6 +744,8 @@ class Server:
                     nonce = None
                     found = False
                     estimated_balance_table = self.get_estimate_balance_table()
+
+                    print("PoW done!")
 
                 self.server_state_lock.release()
 
