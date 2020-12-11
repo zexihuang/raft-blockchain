@@ -586,12 +586,18 @@ class Server:
         self.commit_watches.remove((tuple(transactions_ids), tuple(transactions), block_index))
         self.commit_watches_lock.release()
 
-    def is_transaction_valid(self, transaction):
-        self.balance_table_lock.acquire()
-        if len(transaction) == 3 and self.balance_table[transaction[0]] < transaction[2]:
-            self.balance_table_lock.release()
-            return False
-        self.balance_table_lock.release()
+    @classmethod
+    def is_transaction_valid(cls, estimated_balance_table, transactions, new_transaction):
+        estimated_balance_table_copy = copy.deepcopy(estimated_balance_table)
+        for transaction in transactions:
+            if len(transaction) == 3:  # transfer transaction
+                sender, receiver, amount = transaction
+                estimated_balance_table_copy[sender] -= amount
+                estimated_balance_table_copy[receiver] += amount
+        if len(new_transaction) == 3:
+            sender, receiver, amount = new_transaction
+            if estimated_balance_table_copy[sender] < amount:
+                return False
         return True
 
     @classmethod
@@ -599,8 +605,40 @@ class Server:
         will_encode = str((tuple(transactions), nonce))
         return hashlib.sha3_256(will_encode.encode('utf-8')).hexdigest()
 
-    def get_estimate_balance_table(self):
-        pass
+    def get_balance_table_change(self, start_index):
+        table_diff = [0, 0, 0]
+        self.blockchain_lock.acquire()
+        for block in self.blockchain[start_index:]:
+            for t_id, transaction in block['transactions']:
+                if len(transaction) == 3:  # transfer transaction
+                    sender, receiver, amount = transaction
+                    table_diff[sender] -= amount
+                    table_diff[receiver] += amount
+        self.blockchain_lock.release()
+        return table_diff
+
+    def get_estimate_balance_table(self, from_scratch=False):
+        self.balance_table_lock.acquire()
+        self.commit_index_lock.acquire()
+        self.blockchain_lock.acquire()
+
+        estimated_balance_table = [10, 10, 10]
+        if from_scratch:
+            # assuming everyone has 10-10-10 in the beginning
+            balance_table_diff = self.get_balance_table_change(start_index=0)
+        else:
+            # from commit index
+            estimated_balance_table = self.balance_table
+            balance_table_diff = self.get_balance_table_change(start_index=self.commit_index + 1)
+
+        for i, diff in enumerate(balance_table_diff):
+            estimated_balance_table[i] += diff
+
+        self.blockchain_lock.release()
+        self.commit_index_lock.release()
+        self.balance_table_lock.acquire()
+
+        return estimated_balance_table
 
     def threaded_proof_of_work(self):
 
