@@ -72,7 +72,7 @@ class Server:
         self.received_success = 0
         self.received_success_lock = Lock()
 
-        self.commit_index = 0
+        self.commit_index = -1
         self.commit_index_lock = Lock()
 
         # State variables for vote.
@@ -607,19 +607,17 @@ class Server:
         will_encode = str((tuple(transactions), nonce))
         return hashlib.sha3_256(will_encode.encode('utf-8')).hexdigest()
 
-    def get_balance_table_change(self, start_index):
-        table_diff = [0, 0, 0]
-        self.blockchain_lock.acquire()
-        for block in self.blockchain[start_index:]:
-            for t_id, transaction in block['transactions']:
-                if len(transaction) == 3:  # transfer transaction
-                    sender, receiver, amount = transaction
-                    table_diff[sender] -= amount
-                    table_diff[receiver] += amount
-        self.blockchain_lock.release()
-        return table_diff
-
     def get_estimate_balance_table(self, from_scratch=False):
+        def get_balance_table_change(blockchain, start_index):
+            table_diff = [0, 0, 0]
+            for block in blockchain[start_index:]:
+                for t_id, transaction in block['transactions']:
+                    if len(transaction) == 3:  # transfer transaction
+                        sender, receiver, amount = transaction
+                        table_diff[sender] -= amount
+                        table_diff[receiver] += amount
+            return table_diff
+
         self.balance_table_lock.acquire()
         self.commit_index_lock.acquire()
         self.blockchain_lock.acquire()
@@ -627,18 +625,22 @@ class Server:
         estimated_balance_table = [10, 10, 10]
         if from_scratch:
             # assuming everyone has 10-10-10 in the beginning
-            balance_table_diff = self.get_balance_table_change(start_index=0)
+            balance_table_diff = get_balance_table_change(self.blockchain, start_index=0)
+        elif len(self.blockchain) - 1 == self.commit_index:
+            # last index is committed no need to update
+            estimated_balance_table = self.balance_table
+            balance_table_diff = [0, 0, 0]
         else:
             # from commit index
             estimated_balance_table = self.balance_table
-            balance_table_diff = self.get_balance_table_change(start_index=self.commit_index + 1)
+            balance_table_diff = get_balance_table_change(self.blockchain, start_index=self.commit_index + 1)
 
         for i, diff in enumerate(balance_table_diff):
             estimated_balance_table[i] += diff
 
         self.blockchain_lock.release()
         self.commit_index_lock.release()
-        self.balance_table_lock.acquire()
+        self.balance_table_lock.release()
 
         return estimated_balance_table
 
@@ -647,7 +649,7 @@ class Server:
         # Doing proof of work based on the queue of transactions.
         transactions_ids = []
         transactions = []
-        nouce = None
+        nonce = None
         found = False
         estimated_balance_table = self.get_estimate_balance_table()
 
@@ -659,10 +661,10 @@ class Server:
             self.transaction_queue_lock.acquire()
             while len(transactions) < Server.MAX_TRANSACTION_COUNT and len(self.transaction_queue) > 0:
                 transaction_id, transaction = self.transaction_queue.popleft()
-                if Server.is_transaction_valid(self, estimated_balance_table, transactions, transaction): # Transaction valid
+                if Server.is_transaction_valid(estimated_balance_table, transactions, transaction):  # Transaction valid
                     transactions.append(transaction)
                     transactions_ids.append(transaction_id)
-                else: # Transaction invalid.
+                else:  # Transaction invalid.
                     self.balance_table_lock.acquire()
                     balance = self.balance_table[transaction[0]]
                     self.balance_table_lock.release()
@@ -695,7 +697,7 @@ class Server:
                     self.blockchain.append({
                         'term': self.server_term,
                         'phash': phash,
-                        'nonce': nouce,
+                        'nonce': nonce,
                         'transactions': transactions
                     })
 
@@ -710,15 +712,16 @@ class Server:
                     self.commit_watches_lock.release()
                     start_new_thread(self.threaded_commit_watch, (transactions_ids, transactions, block_index,))
 
+                    self.blockchain_lock.release()
+                    self.server_term_lock.release()
+
                     # Reset proof of work variables.
                     transactions_ids = []
                     transactions = []
-                    nouce = None
+                    nonce = None
                     found = False
                     estimated_balance_table = self.get_estimate_balance_table()
 
-                    self.blockchain_lock.release()
-                    self.server_term_lock.release()
                 self.server_state_lock.release()
 
             self.server_state_lock.acquire()
