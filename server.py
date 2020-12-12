@@ -13,6 +13,7 @@ import utils
 import math
 import hashlib
 from collections import deque
+from heapq import heapify, heappush, heappop
 
 
 class Server:
@@ -99,7 +100,7 @@ class Server:
         self.transaction_ids = set()
         self.transaction_ids_lock = Lock()
 
-        self.commit_watches = set()
+        self.commit_watches = []
         self.commit_watches_lock = Lock()
 
     # Save the state
@@ -399,10 +400,10 @@ class Server:
         self.transaction_queue = deque()
 
         # Start new commit watch for all uncomitted blocks.
-        self.commit_watches = set()
-        for block_index in range(self.commit_index + 1, len(self.blockchain)):
-            self.commit_watches.add(block_index)
-            start_new_thread(self.threaded_commit_watch, (block_index,))
+        self.commit_watches = []
+        for block_index in range(self.commit_index+1, len(self.blockchain)):
+            heappush(self.commit_watches, block_index)
+            start_new_thread(self.threaded_commit_watch, (block_index, ))
 
         self.commit_watches_lock.release()
         self.transaction_queue_lock.release()
@@ -638,25 +639,22 @@ class Server:
         self.server_state_lock.acquire()
         while not sent and self.server_state == 'Leader':
             self.commit_index_lock.acquire()
-            if block_index <= self.commit_index:
+            self.commit_watches_lock.acquire()
+            if self.commit_index >= block_index == self.commit_watches[0]:
                 self.blockchain_lock.acquire()
                 # if self.commit_index < len(self.blockchain):
                 block = self.blockchain[block_index]
-                for i, transaction in enumerate(block['transactions']):
-                    if transaction is not None:
-                        transaction_id, transaction_content = transaction
-                        self.balance_table_lock.acquire()
-                        balance = self.balance_table[transaction_content[0]]
-                        estimated_balance = self.get_estimate_balance_table(
-                            lock_commit_table=False, lock_balance_table=False, lock_blockchain=False)[transaction_content[0]]
-                        self.balance_table_lock.release()
-                        start_new_thread(self.threaded_send_client_response,
-                                     (transaction, (True, balance, estimated_balance)))
+                self.commit_block(block)
+                self.send_clients_responses(block)
                 sent = True
+                # Remove the commit watch from the commit watch list.
+                heappop(self.commit_watches)
                 self.blockchain_lock.release()
             self.commit_index_lock.release()
+            self.commit_watches_lock.release()
             self.server_state_lock.release()
             self.server_state_lock.acquire()
+
         if sent:
             self.blockchain_lock.acquire()
             self.commit_index_lock.acquire()
@@ -664,10 +662,6 @@ class Server:
             self.commit_index_lock.release()
             self.blockchain_lock.release()
         self.server_state_lock.release()
-        # Remove the commit watch from the commit watch list.
-        self.commit_watches_lock.acquire()
-        self.commit_watches.remove(block_index)
-        self.commit_watches_lock.release()
 
     @classmethod
     def is_transaction_valid(cls, estimated_balance_table, transactions, new_transaction):
@@ -806,7 +800,7 @@ class Server:
 
                     # Call commit watch.
                     self.commit_watches_lock.acquire()
-                    self.commit_watches.add(block_index)
+                    heappush(self.commit_watches, block_index)
                     self.commit_watches_lock.release()
                     start_new_thread(self.threaded_commit_watch, (block_index,))
 
