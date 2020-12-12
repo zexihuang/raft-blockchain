@@ -40,7 +40,7 @@ class Client:
         self.transaction_receipts = set()
         self.transaction_receipts_lock = Lock()
 
-    def generate_client_request_message(self, transaction_id, transaction):
+    def generate_client_request_message(self, transaction):
         header = 'Client-Request'
         sender = self.client_id
 
@@ -48,16 +48,16 @@ class Client:
         receiver = self.leader_id_guess
         self.leader_id_guess_lock.release()
         message = {
-            'id': transaction_id,
             'transaction': transaction,
         }
 
         return header, sender, receiver, message
 
-    def threaded_send_client_request(self, transaction):
+    def threaded_send_client_request(self, transaction_content):
         # Send the transaction request to the blockchain.
         transaction_id = time.time()
-        msg = self.generate_client_request_message(transaction_id, transaction)
+        transaction = (transaction_id, transaction_content)
+        msg = self.generate_client_request_message(transaction)
         start_new_thread(utils.send_message, (msg, Client.CHANNEL_PORT))
         start_new_thread(self.threaded_response_watch, (transaction_id, msg))
 
@@ -84,20 +84,22 @@ class Client:
         self.transaction_receipts_lock.acquire()
 
         self.leader_id_guess = sender
-        self.transaction_receipts.add(message['id'])
+
+        transaction = message['transaction']
+        transaction_id, transaction_content = transaction
+        self.transaction_receipts.add(transaction_id)
 
         self.leader_id_guess_lock.release()
         self.transaction_receipts_lock.release()
 
-        transaction = message['transaction']
         result = message['result']
-        if len(transaction) == 1:  # Balance transaction
+        if len(transaction_content) == 1:  # Balance transaction
             print('Balance transaction successful')
-            print(f'Your ({transaction[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
+            print(f'Your ({transaction_content[0]}) committed balance is {result[1]}, pending balance is: {transaction_content[2]}\n')
         else:  # Transfer transaction.
-            print(f'Transfer transaction from you ({transaction[0]}) to {transaction[1]} with amount {transaction[2]}$ is '
+            print(f'Transfer transaction from you ({transaction_content[0]}) to {transaction_content[1]} with amount {transaction_content[2]}$ is '
                   f'{"successful" if result[0] else "unsuccessful"}.')
-            print(f'Your ({transaction[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
+            print(f'Your ({transaction_content[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
 
     def start_client_response_listener(self):
         # Start the listener for transaction feedback.

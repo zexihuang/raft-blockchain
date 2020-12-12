@@ -378,6 +378,7 @@ class Server:
 
     def threaded_become_leader(self):
         # Initialize the next index, last log index, send the first heartbeat.
+
         self.server_state_lock.acquire()
         self.servers_log_next_index_lock.acquire()
         self.blockchain_lock.acquire()
@@ -394,8 +395,10 @@ class Server:
         self.transaction_queue = deque()
 
         # Start new commit watch for all uncomitted blocks.
-        for block in self.blockchain[self.commit_index+1:]:
-
+        self.commit_watches = set()
+        for block_index in range(self.commit_index+1, len(self.blockchain)):
+            self.commit_watches.add(block_index)
+            start_new_thread(self.threaded_commit_watch, (block_index, ))
 
         self.commit_watches_lock.release()
         self.transaction_queue_lock.release()
@@ -404,7 +407,7 @@ class Server:
         self.servers_log_next_index_lock.release()
         self.server_state_lock.release()
         self.leader_id_lock.release()
-        self.commit_index.release()
+        self.commit_index_lock.release()
 
         start_new_thread(self.threaded_send_heartbeat, ())
         start_new_thread(self.threaded_proof_of_work, ())
@@ -576,24 +579,23 @@ class Server:
             start_new_thread(self.threaded_on_receive_vote, (connection,))
 
     # Blockchain and client message utilities.
-    def generate_client_response_message(self, transaction_id, transaction, transaction_result):
+    def generate_client_response_message(self, transaction, transaction_result):
 
         header = 'Client-Response'
         sender = self.server_id
-        receiver = transaction[0]
+        receiver = transaction[1][0]
         message = {
-            'id': transaction_id,
             'transaction': transaction,
             'result': transaction_result,
         }
 
         return header, sender, receiver, message
 
-    def threaded_send_client_response(self, transaction_id, transaction, transaction_result):
+    def threaded_send_client_response(self, transaction, transaction_result):
         # Compose the response for client.
-        # transaction = (A, B, amt) or (A, ), transaction_result = (True/False, balance_of_A).
+        # transaction = (id, (A, B, amt)) or (id, (A, )), transaction_result = (True/False, balance_of_A).
 
-        msg = self.generate_client_response_message(transaction_id, transaction, transaction_result)
+        msg = self.generate_client_response_message(transaction, transaction_result)
         start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
     def update_balance_table(self, transaction_content):
@@ -623,7 +625,7 @@ class Server:
                             lock_commit_table=False, lock_balance_table=False, lock_blockchain=False)[transaction_content[0]]
                         self.balance_table_lock.release()
                         start_new_thread(self.threaded_send_client_response,
-                                     (transactions[i], (True, balance, estimated_balance)))
+                                     (transaction, (True, balance, estimated_balance)))
                 sent = True
                 self.blockchain_lock.release()
             self.commit_index_lock.release()
@@ -710,7 +712,6 @@ class Server:
     def threaded_proof_of_work(self):
 
         # Doing proof of work based on the queue of transactions.
-        transactions_ids = []
         transactions = []
         nonce = None
         found = False
@@ -721,19 +722,20 @@ class Server:
             self.server_state_lock.release()
 
             # Add new transactions to current proof of work.
+
             self.transaction_queue_lock.acquire()
             while len(transactions) < Server.MAX_TRANSACTION_COUNT and len(self.transaction_queue) > 0:
-                transaction_id, transaction = self.transaction_queue.popleft()
+                transaction = self.transaction_queue.popleft()
+                # TODO: transaction_valid now need to work with transactions that has id.
                 if Server.is_transaction_valid(estimated_balance_table, transactions, transaction):  # Transaction valid
                     transactions.append(transaction)
-                    transactions_ids.append(transaction_id)
                 else:  # Transaction invalid.
                     self.balance_table_lock.acquire()
                     balance = self.balance_table[transaction[0]]
-                    estimated_balance = self.get_estimate_balance_table(lock_balance_table=False)[transaction[0]]
+                    estimated_balance = self.get_estimate_balance_table(lock_balance_table=False)[transaction[1][0]]
                     self.balance_table_lock.release()
                     start_new_thread(self.threaded_send_client_response,
-                                     (transaction_id, transaction, (False, balance, estimated_balance)))
+                                     (transaction, (False, balance, estimated_balance)))
             self.transaction_queue_lock.release()
 
             # Do proof of work if transactions are not empty.
@@ -759,20 +761,14 @@ class Server:
                         previous_transactions = self.blockchain[-1]['transactions']
                         phash = Server.get_hash(previous_transactions, previous_nonce)
 
-                    transactions_with_id = []
-                    for i in range(3):
-                        if i < len(transactions):
-                            transaction = transactions[i]
-                            transaction_id = transactions_ids[i]
-                            transactions_with_id.append((transaction_id, transaction))
-                        else:
-                            transactions_with_id.append(None)
+                    while len(transactions) < Server.MAX_TRANSACTION_COUNT:
+                        transactions.append(None)
 
                     self.blockchain.append({
                         'term': self.server_term,
                         'phash': phash,
                         'nonce': nonce,
-                        'transactions': transactions_with_id
+                        'transactions': transactions,
                     })
 
                     self.accept_indexes[self.server_id] = len(self.blockchain) - 1
@@ -784,16 +780,15 @@ class Server:
 
                     # Call commit watch.
                     self.commit_watches_lock.acquire()
-                    self.commit_watches.add((tuple(transactions_ids), tuple(transactions), block_index))
+                    self.commit_watches.add(block_index)
                     self.commit_watches_lock.release()
-                    start_new_thread(self.threaded_commit_watch, (transactions_ids, transactions, block_index,))
+                    start_new_thread(self.threaded_commit_watch, (block_index,))
 
                     self.accept_indexes_lock.release()
                     self.blockchain_lock.release()
                     self.server_term_lock.release()
 
                     # Reset proof of work variables.
-                    transactions_ids = []
                     transactions = []
                     nonce = None
                     found = False
@@ -815,14 +810,14 @@ class Server:
         print(f'Begining-> {message}')
         if self.server_state == 'Leader':  # Process the request.
 
-            transaction_id = message['id']
             transaction = message['transaction']
+            transaction_id = transaction[0]
 
             self.transaction_ids_lock.acquire()
             self.transaction_queue_lock.acquire()
             if transaction_id not in self.transaction_ids:  # Transactions hasn't been processed yet.
                 self.transaction_ids.add(transaction_id)
-                self.transaction_queue.append((transaction_id, transaction))
+                self.transaction_queue.append(transaction)
             self.transaction_ids_lock.release()
             self.transaction_queue_lock.release()
 
