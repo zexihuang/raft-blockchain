@@ -368,17 +368,17 @@ class Server:
         self.server_term_lock.acquire()
         self.transaction_queue_lock.acquire()
         self.commit_watches_lock.acquire()
+        self.commit_index_lock.acquire()
 
         print(f'Leader! Term: {self.server_term}')
         self.server_state = 'Leader'
         self.servers_log_next_index = 3 * [len(self.blockchain)]
         self.leader_id = self.server_id
         self.transaction_queue = deque()
-        self.commit_watches = set()
 
-        for block in self.blockchain:
-            # TODO: add commit watches
-            pass
+        # Start new commit watch for all uncomitted blocks.
+        for block in self.blockchain[self.commit_index+1:]:
+
 
         self.commit_watches_lock.release()
         self.transaction_queue_lock.release()
@@ -387,6 +387,7 @@ class Server:
         self.servers_log_next_index_lock.release()
         self.server_state_lock.release()
         self.leader_id_lock.release()
+        self.commit_index.release()
 
         start_new_thread(self.threaded_send_heartbeat, ())
         start_new_thread(self.threaded_proof_of_work, ())
@@ -578,13 +579,13 @@ class Server:
         msg = self.generate_client_response_message(transaction_id, transaction, transaction_result)
         start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
-    def update_balance_table(self, transaction):
-        if len(transaction) == 3:  # transfer transaction
-            sender, receiver, amount = transaction
+    def update_balance_table(self, transaction_content):
+        if len(transaction_content) == 3:  # transfer transaction
+            sender, receiver, amount = transaction_content
             self.balance_table[sender] -= amount
             self.balance_table[receiver] += amount
 
-    def threaded_commit_watch(self, transactions_ids, transactions, block_index):
+    def threaded_commit_watch(self, block_index):
         # Inform the client if the transaction's block has been committed.
         sent = False
         self.server_state_lock.acquire()
@@ -592,19 +593,22 @@ class Server:
             self.commit_index_lock.acquire()
             if block_index <= self.commit_index:
                 self.blockchain_lock.acquire()
-                if self.commit_index < len(self.blockchain):
-                    self.blockchain_lock.release()
-                    for i, transactions_id in enumerate(transactions_ids):
+                # if self.commit_index < len(self.blockchain):
+                transactions = self.blockchain[block_index]
+                for i, transaction in enumerate(transactions):
+                    transaction = transactions[i]
+                    if transaction is not None:
+                        transaction_id, transaction_content = transaction
                         self.balance_table_lock.acquire()
-                        transaction = transactions[i]
-                        self.update_balance_table(transaction)
-                        balance = self.balance_table[transaction[0]]
-                        estimated_balance = self.get_estimate_balance_table(lock_commit_table=False,
-                                                                            lock_balance_table=False)[transaction[0]]
+                        self.update_balance_table(transaction_content)
+                        balance = self.balance_table[transaction_content[0]]
+                        estimated_balance = self.get_estimate_balance_table(
+                            lock_commit_table=False, lock_balance_table=False, lock_blockchain=False)[transaction_content[0]]
                         self.balance_table_lock.release()
                         start_new_thread(self.threaded_send_client_response,
-                                         (transactions_id, transactions[i], (True, balance, estimated_balance)))
-                    sent = True
+                                     (transactions[i], (True, balance, estimated_balance)))
+                sent = True
+                self.blockchain_lock.release()
             self.commit_index_lock.release()
             self.server_state_lock.release()
             self.server_state_lock.acquire()
@@ -617,7 +621,7 @@ class Server:
         self.server_state_lock.release()
         # Remove the commit watch from the commit watch list.
         self.commit_watches_lock.acquire()
-        self.commit_watches.remove((tuple(transactions_ids), tuple(transactions), block_index))
+        self.commit_watches.remove(block_index)
         self.commit_watches_lock.release()
 
     @classmethod
