@@ -2,3 +2,4 @@
 2) Transfer transaction test
 3) Persistent states.
 4) Reading first blockchain file, and populate blockchain with that.
+5) Commit watch with several blocks commited at the same time, without ordering requirement.
