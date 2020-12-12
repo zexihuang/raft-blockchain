@@ -1,11 +1,29 @@
 1) Leader's previous log is to be overwritten after steps downs.
  a) BUG: after leader partitioned, the client would still send quests to the old leader.
     Then, we the old leader joins back, the client would not resend the transaction request to the new leader (or be relayed to the new leader).
- b) BUG: also in the same case, after the old leader joins as the client, the old client send another transaction request, which would not relay to the new leader for PoW.
+    DISCUSSION: We need to discuss how we approach to solve this problem, I don't feel like hard problem. When client send request to guessed
+    server and if it is dead, channel won't relay anything. Client will just get timed-out. Another question arised is that after timeout
+    should we ask client again, timeout, please give your details again, or just try to send again. Think about this user perspective.
+ b) BUG: also in the same case, after the old leader joins as the client (?? WTF, TYPO?), the old client (OLD client??)
+    send another transaction request, which would not relay to the new leader for PoW.
+    DISCUSSION: This is interesting, but I think that transaction won't be executed so, when old leader understands there is another leader,
+    he will relay the message once it receives the transaction request again from the client.
  c) Note: the old leader's uncommited entries are overwritten correctly.
-2) Transfer transaction test.
+2) Transfer transaction test
  a) BUG: after sending three consecutive transfer requests immediately (transfer $2 to another),
     each transfer transactions are executed successfully, however the balance return for all cases are -2.
+    REASON: Because, when we send 3 consecutive, it is decreasing -2, -2*2, -2*3 = 12 -> 10 - 12 = -2, like we send the all blocks again to
+    the follower and we overwrite or skip. Possible we forgetting to delete previous transactions somewhere else?
+    SOLUTION: Here we can update balance if we didn't update previous with that transaction based on the transaction id, we can track of
+    which transaction id's are already put it into balance table.
+    PROBLEM: THERE WAS NO UPDATE OF BALANCE TABLE, WE UPDATE IT IN COMMIT WATCH BEFORE SENDING TO CLIENT, DOUBLE CHECK THIS!
+    -> SOLVED, HOWEVER THERE IS STILL A BUG: When you send consecutive transactions, you will receive their response randomly ordered. So if
+    we prompt balance, we may need to do some trick on client so that we will understand which transaction belongs to etc, and after that
+    what is the balance? For example one transaction may be rejected not because committed balance is not enough, but balance is not enough
+    because of we have uncommited transactions in blockchain make it not enough.
  b) BUG: after that, any follow-up transfer transactions won't lead to PoW in the leader, and no return for the client.
- c) Note: further after that, balance transactions can still lead to PoW in the leader, and balance returned is -2.
+    REASON: Because there was a bug for returning invalid transaction to client, this is fixed and the reason it is invalid because the balance
+    table doesn't have any money in it. So, when we fix BUG 2a, this will be automatically fixed.
+ c) Note: further after that, balance transactions can still lead to PoW in the leader, and balance returned is -2 -> which is expected.
 3) Persistent states.
+4) Reading first blockchain file, and populate blockchain with that.

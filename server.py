@@ -575,6 +575,12 @@ class Server:
         msg = self.generate_client_response_message(transaction_id, transaction, transaction_result)
         start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
+    def update_balance_table(self, transaction):
+        if len(transaction) == 3:  # transfer transaction
+            sender, receiver, amount = transaction
+            self.balance_table[sender] -= amount
+            self.balance_table[receiver] += amount
+
     def threaded_commit_watch(self, transactions_ids, transactions, block_index):
         # Inform the client if the transaction's block has been committed.
         sent = False
@@ -587,7 +593,9 @@ class Server:
                     self.blockchain_lock.release()
                     for i, transactions_id in enumerate(transactions_ids):
                         self.balance_table_lock.acquire()
-                        balance = self.balance_table[transactions[i][0]]
+                        transaction = transactions[i]
+                        self.update_balance_table(transaction)
+                        balance = self.balance_table[transaction[0]]
                         self.balance_table_lock.release()
                         start_new_thread(self.threaded_send_client_response,
                                          (transactions_id, transactions[i], (True, balance)))
@@ -641,17 +649,18 @@ class Server:
         self.commit_index_lock.acquire()
         self.blockchain_lock.acquire()
 
+        balance_table_copy = copy.deepcopy(self.balance_table)
         estimated_balance_table = [10, 10, 10]
         if from_scratch:
             # assuming everyone has 10-10-10 in the beginning
             balance_table_diff = get_balance_table_change(self.blockchain, start_index=0)
         elif len(self.blockchain) - 1 == self.commit_index:
             # last index is committed no need to update
-            estimated_balance_table = self.balance_table
+            estimated_balance_table = balance_table_copy
             balance_table_diff = [0, 0, 0]
         else:
             # from commit index
-            estimated_balance_table = self.balance_table
+            estimated_balance_table = balance_table_copy
             balance_table_diff = get_balance_table_change(self.blockchain, start_index=self.commit_index + 1)
 
         for i, diff in enumerate(balance_table_diff):
@@ -687,7 +696,7 @@ class Server:
                     self.balance_table_lock.acquire()
                     balance = self.balance_table[transaction[0]]
                     self.balance_table_lock.release()
-                    start_new_thread(self.generate_client_response_message,
+                    start_new_thread(self.threaded_send_client_response,
                                      (transaction_id, transaction, (False, balance)))
             self.transaction_queue_lock.release()
 
@@ -744,6 +753,8 @@ class Server:
                     nonce = None
                     found = False
                     estimated_balance_table = self.get_estimate_balance_table()
+                    print(estimated_balance_table)
+                    print(self.balance_table)
 
                     print("PoW done!")
 
