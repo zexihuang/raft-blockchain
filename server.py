@@ -613,9 +613,8 @@ class Server:
             if block_index <= self.commit_index:
                 self.blockchain_lock.acquire()
                 # if self.commit_index < len(self.blockchain):
-                transactions = self.blockchain[block_index]
-                for i, transaction in enumerate(transactions):
-                    transaction = transactions[i]
+                block = self.blockchain[block_index]
+                for i, transaction in enumerate(block['transactions']):
                     if transaction is not None:
                         transaction_id, transaction_content = transaction
                         self.balance_table_lock.acquire()
@@ -647,12 +646,12 @@ class Server:
     def is_transaction_valid(cls, estimated_balance_table, transactions, new_transaction):
         estimated_balance_table_copy = copy.deepcopy(estimated_balance_table)
         for transaction in transactions:
-            if len(transaction) == 3:  # transfer transaction
-                sender, receiver, amount = transaction
+            if transaction is not None and len(new_transaction[1]) == 3:  # transfer transaction
+                sender, receiver, amount = new_transaction[1]
                 estimated_balance_table_copy[sender] -= amount
                 estimated_balance_table_copy[receiver] += amount
-        if len(new_transaction) == 3:
-            sender, receiver, amount = new_transaction
+        if new_transaction is not None and len(new_transaction[1]) == 3:
+            sender, receiver, amount = new_transaction[1]
             if estimated_balance_table_copy[sender] < amount:
                 return False
         return True
@@ -671,7 +670,7 @@ class Server:
                     if transaction is not None:
                         transaction_content = transaction[1]
                         if len(transaction_content) == 3:  # transfer transaction
-                            sender, receiver, amount = transaction
+                            sender, receiver, amount = transaction_content
                             table_diff[sender] -= amount
                             table_diff[receiver] += amount
             return table_diff
@@ -726,13 +725,13 @@ class Server:
             self.transaction_queue_lock.acquire()
             while len(transactions) < Server.MAX_TRANSACTION_COUNT and len(self.transaction_queue) > 0:
                 transaction = self.transaction_queue.popleft()
-                # TODO: transaction_valid now need to work with transactions that has id.
                 if Server.is_transaction_valid(estimated_balance_table, transactions, transaction):  # Transaction valid
                     transactions.append(transaction)
                 else:  # Transaction invalid.
                     self.balance_table_lock.acquire()
-                    balance = self.balance_table[transaction[0]]
-                    estimated_balance = self.get_estimate_balance_table(lock_balance_table=False)[transaction[1][0]]
+                    transaction_content = transaction[1]
+                    balance = self.balance_table[transaction_content[0]]
+                    estimated_balance = self.get_estimate_balance_table(lock_balance_table=False)[transaction_content[0]]
                     self.balance_table_lock.release()
                     start_new_thread(self.threaded_send_client_response,
                                      (transaction, (False, balance, estimated_balance)))

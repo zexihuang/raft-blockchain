@@ -95,7 +95,7 @@ class Client:
         result = message['result']
         if len(transaction_content) == 1:  # Balance transaction
             print('Balance transaction successful')
-            print(f'Your ({transaction_content[0]}) committed balance is {result[1]}, pending balance is: {transaction_content[2]}\n')
+            print(f'Your ({transaction_content[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
         else:  # Transfer transaction.
             print(f'Transfer transaction from you ({transaction_content[0]}) to {transaction_content[1]} with amount {transaction_content[2]}$ is '
                   f'{"successful" if result[0] else "unsuccessful"}.')
