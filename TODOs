@@ -1,3 +1,11 @@
-1) Leader's previous log is to be overwritten after setps downs.
-2) Leader relay
-3)
+1) Leader's previous log is to be overwritten after steps downs.
+ a) BUG: after leader partitioned, the client would still send quests to the old leader.
+    Then, we the old leader joins back, the client would not resend the transaction request to the new leader (or be relayed to the new leader).
+ b) BUG: also in the same case, after the old leader joins as the client, the old client send another transaction request, which would not relay to the new leader for PoW.
+ c) Note: the old leader's uncommited entries are overwritten correctly.
+2) Transfer transaction test.
+ a) BUG: after sending three consecutive transfer requests immediately (transfer $2 to another),
+    each transfer transactions are executed successfully, however the balance return for all cases are -2.
+ b) BUG: after that, any follow-up transfer transactions won't lead to PoW in the leader, and no return for the client.
+ c) Note: further after that, balance transactions can still lead to PoW in the leader, and balance returned is -2.
+3) Persistent states.
