@@ -192,6 +192,18 @@ class Server:
 
         return header, sender, receiver, message
 
+    def update_transaction_ids(self, block, add=True):
+        # if add is False, remove transactions ids
+        self.transaction_ids_lock.acquire()
+        for transaction in block['transactions']:
+            if transaction is not None:
+                transaction_id = transaction[0]
+                if add:
+                    self.transaction_ids.add(transaction_id)
+                else:
+                    self.transaction_ids.remove(transaction_id)
+        self.transaction_ids_lock.release()
+
     def on_receive_operation_request(self, sender, message):
         self.server_term_lock.acquire()
         self.voted_candidate_lock.acquire()
@@ -226,9 +238,14 @@ class Server:
                     for i, entry in enumerate(message['entries']):
                         if len(self.blockchain) < prev_log_index + i + 2:
                             self.blockchain.append(entry)
+                            self.update_transaction_ids(entry)
                         elif entry['term'] != self.blockchain[prev_log_index + i + 1]['term']:
+                            # remove overwritten transactions_ids
+                            for will_be_deleted_block in self.blockchain[prev_log_index + i + 1:]:
+                                self.update_transaction_ids(will_be_deleted_block, add=False)
                             self.blockchain = self.blockchain[:prev_log_index + i + 1]
                             self.blockchain.append(entry)
+                            self.update_transaction_ids(entry)
                     success = True
                 else:
                     success = False
@@ -639,23 +656,26 @@ class Server:
         will_encode = str((tuple(transactions), nonce))
         return hashlib.sha3_256(will_encode.encode('utf-8')).hexdigest()
 
-    def get_estimate_balance_table(self, lock_balance_table=True, lock_commit_table=True, from_scratch=False):
-        # lock_balance_table: if lock should be used.
+    def get_estimate_balance_table(self, lock_balance_table=True, lock_commit_table=True, lock_blockchain=True, from_scratch=False):
+        # lock_balance_table: True if lock should be used.
         def get_balance_table_change(blockchain, start_index):
             table_diff = [0, 0, 0]
             for block in blockchain[start_index:]:
                 for transaction in block['transactions']:
-                    if transaction is not None and len(transaction) == 3:  # transfer transaction
-                        sender, receiver, amount = transaction
-                        table_diff[sender] -= amount
-                        table_diff[receiver] += amount
+                    if transaction is not None:
+                        transaction_content = transaction[1]
+                        if len(transaction_content) == 3:  # transfer transaction
+                            sender, receiver, amount = transaction
+                            table_diff[sender] -= amount
+                            table_diff[receiver] += amount
             return table_diff
 
         if lock_balance_table:
             self.balance_table_lock.acquire()
         if lock_commit_table:
             self.commit_index_lock.acquire()
-        self.blockchain_lock.acquire()
+        if lock_blockchain:
+            self.blockchain_lock.acquire()
 
         balance_table_copy = copy.deepcopy(self.balance_table)
         estimated_balance_table = [10, 10, 10]
@@ -674,7 +694,8 @@ class Server:
         for i, diff in enumerate(balance_table_diff):
             estimated_balance_table[i] += diff
 
-        self.blockchain_lock.release()
+        if lock_blockchain:
+            self.blockchain_lock.release()
         if lock_commit_table:
             self.commit_index_lock.release()
         if lock_balance_table:
@@ -734,11 +755,20 @@ class Server:
                         previous_transactions = self.blockchain[-1]['transactions']
                         phash = Server.get_hash(previous_transactions, previous_nonce)
 
+                    transactions_with_id = []
+                    for i in range(3):
+                        if i < len(transactions):
+                            transaction = transactions[i]
+                            transaction_id = transactions_ids[i]
+                            transactions_with_id.append((transaction_id, transaction))
+                        else:
+                            transactions_with_id.append(None)
+
                     self.blockchain.append({
                         'term': self.server_term,
                         'phash': phash,
                         'nonce': nonce,
-                        'transactions': transactions
+                        'transactions': transactions_with_id
                     })
 
                     self.accept_indexes[self.server_id] = len(self.blockchain) - 1
