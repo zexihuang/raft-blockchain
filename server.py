@@ -87,7 +87,7 @@ class Server:
 
         # State variables for client.
         self.blockchain = []  # each block: {'term': ..., 'phash': ..., 'nonce': ...,
-        # 'transactions': ((A, B, 5), (A,), None)}
+        # 'transactions': ((unique_id, (A, B, 5)), ((unique_id, (A,)), None)}
         self.blockchain_lock = Lock()
 
         self.balance_table = [10, 10, 10]
@@ -375,7 +375,10 @@ class Server:
         self.leader_id = self.server_id
         self.transaction_queue = deque()
         self.commit_watches = set()
-        # TODO: may initiliaze some variables
+
+        for block in self.blockchain:
+            # TODO: add commit watches
+            pass
 
         self.commit_watches_lock.release()
         self.transaction_queue_lock.release()
@@ -596,9 +599,11 @@ class Server:
                         transaction = transactions[i]
                         self.update_balance_table(transaction)
                         balance = self.balance_table[transaction[0]]
+                        estimated_balance = self.get_estimate_balance_table(lock_commit_table=False,
+                                                                            lock_balance_table=False)[transaction[0]]
                         self.balance_table_lock.release()
                         start_new_thread(self.threaded_send_client_response,
-                                         (transactions_id, transactions[i], (True, balance)))
+                                         (transactions_id, transactions[i], (True, balance, estimated_balance)))
                     sent = True
             self.commit_index_lock.release()
             self.server_state_lock.release()
@@ -634,7 +639,8 @@ class Server:
         will_encode = str((tuple(transactions), nonce))
         return hashlib.sha3_256(will_encode.encode('utf-8')).hexdigest()
 
-    def get_estimate_balance_table(self, from_scratch=False):
+    def get_estimate_balance_table(self, lock_balance_table=True, lock_commit_table=True, from_scratch=False):
+        # lock_balance_table: if lock should be used.
         def get_balance_table_change(blockchain, start_index):
             table_diff = [0, 0, 0]
             for block in blockchain[start_index:]:
@@ -645,8 +651,10 @@ class Server:
                         table_diff[receiver] += amount
             return table_diff
 
-        self.balance_table_lock.acquire()
-        self.commit_index_lock.acquire()
+        if lock_balance_table:
+            self.balance_table_lock.acquire()
+        if lock_commit_table:
+            self.commit_index_lock.acquire()
         self.blockchain_lock.acquire()
 
         balance_table_copy = copy.deepcopy(self.balance_table)
@@ -667,8 +675,10 @@ class Server:
             estimated_balance_table[i] += diff
 
         self.blockchain_lock.release()
-        self.commit_index_lock.release()
-        self.balance_table_lock.release()
+        if lock_commit_table:
+            self.commit_index_lock.release()
+        if lock_balance_table:
+            self.balance_table_lock.release()
 
         return estimated_balance_table
 
@@ -695,9 +705,10 @@ class Server:
                 else:  # Transaction invalid.
                     self.balance_table_lock.acquire()
                     balance = self.balance_table[transaction[0]]
+                    estimated_balance = self.get_estimate_balance_table(lock_balance_table=False)[transaction[0]]
                     self.balance_table_lock.release()
                     start_new_thread(self.threaded_send_client_response,
-                                     (transaction_id, transaction, (False, balance)))
+                                     (transaction_id, transaction, (False, balance, estimated_balance)))
             self.transaction_queue_lock.release()
 
             # Do proof of work if transactions are not empty.
@@ -767,6 +778,7 @@ class Server:
         # Receive transaction request from client.
 
         header, sender, receiver, message = utils.receive_message(connection)
+        print(f'Begining-> {message}')
         if self.server_state == 'Leader':  # Process the request.
 
             transaction_id = message['id']
@@ -781,9 +793,11 @@ class Server:
             self.transaction_queue_lock.release()
 
         else:  # Relay the client message to the current leader.
+            print(f'Else... {self.leader_id}')
             while True:
                 self.leader_id_lock.acquire()
-                if self.leader_id:  # Wait until a leader is elected.
+                if self.leader_id is not None:  # Wait until a leader is elected.
+                    print(f'Relaying to {self.leader_id}, {message}')
                     msg = (header, self.server_id, self.leader_id, message)
                     start_new_thread(utils.send_message, (msg, server.CHANNEL_PORT))
                     self.leader_id_lock.release()

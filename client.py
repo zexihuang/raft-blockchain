@@ -93,11 +93,11 @@ class Client:
         result = message['result']
         if len(transaction) == 1:  # Balance transaction
             print('Balance transaction successful')
-            print(f'Your ({transaction[0]}) balance is: {result[1]}\n')
+            print(f'Your ({transaction[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
         else:  # Transfer transaction.
-            print(f'Transfer transaction from you ({transaction[0]}) to {transaction[1]} '
+            print(f'Transfer transaction from you ({transaction[0]}) to {transaction[1]} with amount {transaction[2]}$ is '
                   f'{"successful" if result[0] else "unsuccessful"}.')
-            print(f'Your ({transaction[0]}) balance is: {result[1]}\n')
+            print(f'Your ({transaction[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
 
     def start_client_response_listener(self):
         # Start the listener for transaction feedback.
