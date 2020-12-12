@@ -257,8 +257,12 @@ class Server:
 
             start_new_thread(self.threaded_leader_election_watch, ())
 
-            # update commit index depends on given message
+            # update commit index depends on given message, and commit the previous entries
+            first_commit_index = self.commit_index
             self.commit_index = message['commit_index']
+            for i in range(first_commit_index + 1, self.commit_index + 1):
+                block = self.blockchain[i]
+                self.commit_block(block)
 
         self.server_state_lock.release()
         self.voted_candidate_lock.release()
@@ -396,9 +400,9 @@ class Server:
 
         # Start new commit watch for all uncomitted blocks.
         self.commit_watches = set()
-        for block_index in range(self.commit_index+1, len(self.blockchain)):
+        for block_index in range(self.commit_index + 1, len(self.blockchain)):
             self.commit_watches.add(block_index)
-            start_new_thread(self.threaded_commit_watch, (block_index, ))
+            start_new_thread(self.threaded_commit_watch, (block_index,))
 
         self.commit_watches_lock.release()
         self.transaction_queue_lock.release()
@@ -604,6 +608,30 @@ class Server:
             self.balance_table[sender] -= amount
             self.balance_table[receiver] += amount
 
+    def commit_block(self, block, lock_balance_table=True):
+        if lock_balance_table:
+            self.balance_table_lock.acquire()
+        for transaction in block['transactions']:
+            if transaction is not None:
+                transaction_id, transaction_content = transaction
+                self.update_balance_table(transaction_content)
+        if lock_balance_table:
+            self.balance_table_lock.release()
+
+    def send_clients_responses(self, block, lock_balance_table=True):
+        if lock_balance_table:
+            self.balance_table_lock.acquire()
+        for i, transaction in enumerate(block['transactions']):
+            if transaction is not None:
+                transaction_id, transaction_content = transaction
+                balance = self.balance_table[transaction_content[0]]
+                estimated_balance = self.get_estimate_balance_table(
+                    lock_commit_table=False, lock_balance_table=False, lock_blockchain=False)[transaction_content[0]]
+                start_new_thread(self.threaded_send_client_response,
+                                 (transaction, (True, balance, estimated_balance)))
+        if lock_balance_table:
+            self.balance_table_lock.release()
+
     def threaded_commit_watch(self, block_index):
         # Inform the client if the transaction's block has been committed.
         sent = False
@@ -618,7 +646,6 @@ class Server:
                     if transaction is not None:
                         transaction_id, transaction_content = transaction
                         self.balance_table_lock.acquire()
-                        self.update_balance_table(transaction_content)
                         balance = self.balance_table[transaction_content[0]]
                         estimated_balance = self.get_estimate_balance_table(
                             lock_commit_table=False, lock_balance_table=False, lock_blockchain=False)[transaction_content[0]]
