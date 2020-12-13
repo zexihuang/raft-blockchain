@@ -2,6 +2,8 @@ import socket
 import pickle
 import random
 import string
+import time
+import hashlib
 
 BUFFER_SIZE = 65536
 
@@ -39,3 +41,47 @@ def generate_random_string_with_ending(length, ending):
         if s[-1] in ending:
             found = True
     return s
+
+
+def get_hash(transactions, nonce):
+    will_encode = str((tuple(transactions), nonce))
+    return hashlib.sha3_256(will_encode.encode('utf-8')).hexdigest()
+
+
+def read_first_blockchain(file_path):
+    def prepare_block(blockchain, transactions, term):
+        found = False
+        nonce = None
+        while not found:
+            nonce = generate_random_string_with_ending(length=6, ending={'0', '1', '2'})
+            cur_pow = get_hash(transactions, nonce)
+            if '2' >= cur_pow[-1] >= '0':
+                found = True
+
+        phash = None
+        if len(blockchain) > 0:
+            previous_nonce = blockchain[-1]['nonce']
+            previous_transactions = blockchain[-1]['transactions']
+            phash = get_hash(previous_transactions, previous_nonce)
+
+        return {'term': term, 'phash': phash, 'nonce': nonce, 'transactions': transactions}
+
+    blockchain = []
+    with open(file_path, 'r') as _file:
+        term = -1
+        transactions = []
+        for line in _file.readlines():
+            sender, receiver, amount = map(int, tuple(line.split()))
+            transaction_id = time.time()
+            transaction = (transaction_id, (sender, receiver, amount))
+            transactions.append(transaction)
+            if len(transactions) == 3:
+                # block is finished, find nonce...
+                block = prepare_block(blockchain, transactions, term)
+                blockchain.append(block)
+                transactions = []
+        if len(transactions) > 0:
+            transactions += [None for _ in range(3 - len(transactions))]
+            block = prepare_block(blockchain, transactions, term)
+            blockchain.append(block)
+    return blockchain

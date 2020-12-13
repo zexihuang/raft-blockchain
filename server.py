@@ -11,7 +11,6 @@ import numpy as np
 import copy
 import utils
 import math
-import hashlib
 from collections import deque
 from heapq import heapify, heappush, heappop
 
@@ -89,6 +88,7 @@ class Server:
         # State variables for client.
         self.blockchain = []  # each block: {'term': ..., 'phash': ..., 'nonce': ...,
         # 'transactions': ((unique_id, (A, B, 5)), ((unique_id, (A,)), None)}
+        self.first_blockchain_read = False
         self.blockchain_lock = Lock()
 
         self.balance_table = [10, 10, 10]
@@ -252,7 +252,7 @@ class Server:
                     # update commit index depends on given message, and commit the previous entries
                     if self.commit_index < message['commit_index']:  # If not, the block has been already committed.
                         first_commit_index = self.commit_index
-                        self.commit_index = min(len(self.blockchain)-1, message['commit_index'])
+                        self.commit_index = min(len(self.blockchain) - 1, message['commit_index'])
                         for i in range(first_commit_index + 1, self.commit_index + 1):
                             block = self.blockchain[i]
                             print(f'Committing: {i}, {block}')
@@ -674,11 +674,6 @@ class Server:
                 return False
         return True
 
-    @classmethod
-    def get_hash(cls, transactions, nonce):
-        will_encode = str((tuple(transactions), nonce))
-        return hashlib.sha3_256(will_encode.encode('utf-8')).hexdigest()
-
     def get_estimate_balance_table(self, lock_balance_table=True, lock_commit_table=True, lock_blockchain=True, from_scratch=False):
         # lock_balance_table: True if lock should be used.
         def get_balance_table_change(blockchain, start_index):
@@ -758,7 +753,7 @@ class Server:
             # Do proof of work if transactions are not empty.
             if len(transactions) > 0:
                 nonce = utils.generate_random_string_with_ending(length=6, ending={'0', '1', '2'})
-                cur_pow = Server.get_hash(transactions, nonce)
+                cur_pow = utils.get_hash(transactions, nonce)
                 if '2' >= cur_pow[-1] >= '0':
                     found = True
 
@@ -776,7 +771,7 @@ class Server:
                     if len(self.blockchain) > 0:
                         previous_nonce = self.blockchain[-1]['nonce']
                         previous_transactions = self.blockchain[-1]['transactions']
-                        phash = Server.get_hash(previous_transactions, previous_nonce)
+                        phash = utils.get_hash(previous_transactions, previous_nonce)
 
                     while len(transactions) < Server.MAX_TRANSACTION_COUNT:
                         transactions.append(None)
@@ -857,6 +852,13 @@ class Server:
 
         # Load the state, if any.
         result = self.load_the_state()
+
+        # TODO: do we have to update other things here?
+        if not self.first_blockchain_read:
+            with open('blockchain_processed.pkl', 'rb') as _fb:
+                self.blockchain = pickle.load(_fb)
+            self.commit_index = len(self.blockchain) - 1
+            self.first_blockchain_read = True
 
         # Start/Resume operations based on the server state.
         threads = [(self.start_client_listener, ()), (self.start_vote_listener, ()), (self.start_operation_listener, ())]

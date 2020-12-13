@@ -1,7 +1,6 @@
 Done:
 1) Leader's previous log is to be overwritten after steps downs.
 2) Transfer transaction test
-4) Reading first blockchain file, and populate blockchain with that.
 5) Commit watch with several blocks commited at the same time, without ordering requirement.
 TODO:
 6) When nobody is the leader and the client sends a request.
@@ -14,3 +13,7 @@ TODO:
    updated their commit index to 5, let's say they are still 3. Then, one of the followers becomes the new leader, and the
    old leader joins back as the follower.
    b) FIXED by comparing current commit index with the message commit index before committing as a follower.
+4) Reading first blockchain file, and populate blockchain with that.
+    -> Channel reads blockchain.txt and turned into blockchain_processed.pkl, then servers are reading that pkl file to make sure
+    their blockchains are same.
+    -> We need to initialize some variable like commit_index etc based on blockchain.
