@@ -1,5 +1,8 @@
+Done:
 1) Leader's previous log is to be overwritten after steps downs.
 2) Transfer transaction test
-3) Persistent states.
 4) Reading first blockchain file, and populate blockchain with that.
 5) Commit watch with several blocks commited at the same time, without ordering requirement.
+TODO:
+6) When nobody is the leader and the client sends a request.
+3) Persistent states.
