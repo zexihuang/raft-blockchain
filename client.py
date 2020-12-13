@@ -61,19 +61,20 @@ class Client:
         transaction = (transaction_id, transaction_content)
         msg = self.generate_client_request_message(transaction)
         start_new_thread(utils.send_message, (msg, Client.CHANNEL_PORT))
-        start_new_thread(self.threaded_response_watch, (transaction_id, msg))
+        start_new_thread(self.threaded_response_watch, (transaction, ))
 
-    def threaded_response_watch(self, transaction_id, msg):
+    def threaded_response_watch(self, transaction):
         # Resend request if the response for a certain transaction msg timeout.
 
         timeout = random.uniform(Client.CLIENT_TRANSACTION_TIMEOUT, Client.CLIENT_TRANSACTION_TIMEOUT*2)
         time.sleep(timeout)
         self.transaction_receipts_lock.acquire()
+        transaction_id = transaction[0]
         if transaction_id not in self.transaction_receipts:  # Resend request and restart timeout.
+            msg = self.generate_client_request_message(transaction)
+            print(f'Resending {msg}')
             start_new_thread(utils.send_message, (msg, Client.CHANNEL_PORT))
-            start_new_thread(self.threaded_response_watch, (transaction_id, msg))
-        else:  # Garbage collection since the transaction_id will never be checked again.
-            self.transaction_receipts.remove(transaction_id)
+            start_new_thread(self.threaded_response_watch, (transaction, ))
 
         self.transaction_receipts_lock.release()
 
@@ -83,25 +84,27 @@ class Client:
         header, sender, receiver, message = utils.receive_message(connection)
 
         self.leader_id_guess_lock.acquire()
-        self.transaction_receipts_lock.acquire()
-
-        self.leader_id_guess = sender
+        if self.leader_id_guess != sender:
+            print(f'Changing leader guess from {self.leader_id_guess} to {sender}')
+            self.leader_id_guess = sender
+        self.leader_id_guess_lock.release()
 
         transaction = message['transaction']
-        transaction_id, transaction_content = transaction
-        self.transaction_receipts.add(transaction_id)
+        if transaction is not None:  # Not a leader announcement message
+            self.transaction_receipts_lock.acquire()
+            transaction_id, transaction_content = transaction
+            if transaction_id not in self.transaction_receipts:  # Not received yet.
+                self.transaction_receipts.add(transaction_id)
+                result = message['result']
+                if len(transaction_content) == 1:  # Balance transaction
+                    print('Balance transaction successful')
+                    print(f'Your ({transaction_content[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
+                else:  # Transfer transaction.
+                    print(f'Transfer transaction from you ({transaction_content[0]}) to {transaction_content[1]} with amount {transaction_content[2]}$ is '
+                          f'{"successful" if result[0] else "unsuccessful"}.')
+                    print(f'Your ({transaction_content[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
 
-        self.leader_id_guess_lock.release()
-        self.transaction_receipts_lock.release()
-
-        result = message['result']
-        if len(transaction_content) == 1:  # Balance transaction
-            print('Balance transaction successful')
-            print(f'Your ({transaction_content[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
-        else:  # Transfer transaction.
-            print(f'Transfer transaction from you ({transaction_content[0]}) to {transaction_content[1]} with amount {transaction_content[2]}$ is '
-                  f'{"successful" if result[0] else "unsuccessful"}.')
-            print(f'Your ({transaction_content[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
+            self.transaction_receipts_lock.release()
 
     def start_client_response_listener(self):
         # Start the listener for transaction feedback.

@@ -24,6 +24,7 @@ class Server:
         1: (11002, 12002, 13002),
         2: (11003, 12003, 13003),
     }
+    CLIENTS = [0, 1, 2]
     MAX_CONNECTION = 100
     BUFFER_SIZE = 65536
 
@@ -328,8 +329,6 @@ class Server:
         else:
             raise NotImplementedError(f'Header {header} is not related!')
 
-        self.save_the_state()
-
     def threaded_response_watch(self, receiver):
         # Watch whether we receive response for a specific normal operation message sent. If not, resend the message.
         timeout = random.uniform(Server.MESSAGE_SENDING_TIMEOUT, Server.MESSAGE_SENDING_TIMEOUT * 2)
@@ -349,13 +348,6 @@ class Server:
                 # start_new_thread(self.threaded_on_receive_operation, ())
                 start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
         self.server_state_lock.release()
-
-    # def threaded_heartbeat(self):
-    #     # Send normal operation heartbeats to the followers.
-    #     for receiver in self.other_servers:
-    #         msg = self.generate_operation_request_message(receiver, is_heartbeat=True)
-    #         # start_new_thread(self.threaded_on_receive_operation, ())
-    #         start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
     def threaded_send_heartbeat(self):
 
@@ -407,6 +399,7 @@ class Server:
 
         start_new_thread(self.threaded_send_heartbeat, ())
         start_new_thread(self.threaded_proof_of_work, ())
+        start_new_thread(self.threaded_announce_leadership_to_clients, ())
 
     def start_operation_listener(self):
         # Start listener for operation messages.
@@ -566,8 +559,6 @@ class Server:
         else:
             raise NotImplementedError(f'Header {header} is not related!')
 
-        self.save_the_state()
-
     def start_vote_listener(self):
         # Start listener for vote messages.
 
@@ -595,6 +586,22 @@ class Server:
 
         msg = self.generate_client_response_message(transaction, transaction_result)
         start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+
+    def threaded_announce_leadership_to_clients(self):
+        # Announce self is the new leader by sending a special client-response message without actual transaction or result.
+
+        self.server_state_lock.acquire()
+        if self.server_state == 'Leader':
+            for client in Server.CLIENTS:
+                header = 'Client-Response'
+                sender = self.server_id
+                message = {
+                    'transaction': None,
+                    'result': None
+                }
+                msg = (header, sender, client, message)
+                start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+        self.server_state_lock.release()
 
     def update_balance_table(self, transaction_content):
         if len(transaction_content) == 3:  # transfer transaction
@@ -829,8 +836,6 @@ class Server:
                     self.leader_id_lock.release()
                     break
                 self.leader_id_lock.release()
-
-        self.save_the_state()
 
     def start_client_listener(self):
         # Start listener for client messages.

@@ -141,10 +141,7 @@ class Channel:
         start_new_thread(self.configuration_change_handler, ())
 
         # generate first blockchain
-        if not os.path.exists('blockchain_processed.pkl'):
-            blockchain = utils.read_first_blockchain('blockchain.txt')
-            with open('blockchain_processed.pkl', 'wb') as _fb:
-                pickle.dump(blockchain, _fb)
+        utils.read_first_blockchain()
 
         while 1:
             pass
