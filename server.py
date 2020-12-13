@@ -211,7 +211,6 @@ class Server:
         self.server_state_lock.acquire()
         self.leader_id_lock.acquire()
         self.commit_index_lock.acquire()
-        print(message)
         if message['term'] < self.server_term:
             # reject message because term is smaller.
             msg = self.generate_operation_response_message(sender, None, success=False)
@@ -229,6 +228,7 @@ class Server:
             self.leader_id = message['leader_id']
 
             if len(message['entries']) > 0:  # append message
+                print(message)
                 self.blockchain_lock.acquire()
                 print(f'Blockchain before: {self.blockchain}')
                 prev_log_index = message['previous_log_index']
@@ -248,6 +248,16 @@ class Server:
                             self.blockchain.append(entry)
                             self.update_transaction_ids(entry)
                     success = True
+                    print(f'Before commit balance table: {self.balance_table}')
+                    # update commit index depends on given message, and commit the previous entries
+                    first_commit_index = self.commit_index
+                    self.commit_index = min(len(self.blockchain)-1, message['commit_index'])
+                    print(self.commit_index)
+                    for i in range(first_commit_index + 1, self.commit_index + 1):
+                        block = self.blockchain[i]
+                        print(f'block: {block}')
+                        self.commit_block(block)
+                    print(f'After commit balance table: {self.balance_table}')
                 else:
                     success = False
                 print(f'Blockchain after: {self.blockchain}')
@@ -257,13 +267,6 @@ class Server:
                 start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
             start_new_thread(self.threaded_leader_election_watch, ())
-
-            # update commit index depends on given message, and commit the previous entries
-            first_commit_index = self.commit_index
-            self.commit_index = message['commit_index']
-            for i in range(first_commit_index + 1, self.commit_index + 1):
-                block = self.blockchain[i]
-                self.commit_block(block)
 
         self.server_state_lock.release()
         self.voted_candidate_lock.release()
@@ -401,9 +404,9 @@ class Server:
 
         # Start new commit watch for all uncomitted blocks.
         self.commit_watches = []
-        for block_index in range(self.commit_index+1, len(self.blockchain)):
+        for block_index in range(self.commit_index + 1, len(self.blockchain)):
             heappush(self.commit_watches, block_index)
-            start_new_thread(self.threaded_commit_watch, (block_index, ))
+            start_new_thread(self.threaded_commit_watch, (block_index,))
 
         self.commit_watches_lock.release()
         self.transaction_queue_lock.release()
@@ -654,13 +657,6 @@ class Server:
             self.commit_watches_lock.release()
             self.server_state_lock.release()
             self.server_state_lock.acquire()
-
-        if sent:
-            self.blockchain_lock.acquire()
-            self.commit_index_lock.acquire()
-            print(f'BC: {self.blockchain}, CI: {self.commit_index}')
-            self.commit_index_lock.release()
-            self.blockchain_lock.release()
         self.server_state_lock.release()
 
     @classmethod
@@ -813,9 +809,6 @@ class Server:
                     nonce = None
                     found = False
                     estimated_balance_table = self.get_estimate_balance_table()
-                    print(estimated_balance_table)
-                    print(self.balance_table)
-
                     print("PoW done!")
 
                 self.server_state_lock.release()
@@ -827,7 +820,6 @@ class Server:
         # Receive transaction request from client.
 
         header, sender, receiver, message = utils.receive_message(connection)
-        print(f'Begining-> {message}')
         if self.server_state == 'Leader':  # Process the request.
 
             transaction = message['transaction']
@@ -842,11 +834,9 @@ class Server:
             self.transaction_queue_lock.release()
 
         else:  # Relay the client message to the current leader.
-            print(f'Else... {self.leader_id}')
             while True:
                 self.leader_id_lock.acquire()
                 if self.leader_id is not None:  # Wait until a leader is elected.
-                    print(f'Relaying to {self.leader_id}, {message}')
                     msg = (header, self.server_id, self.leader_id, message)
                     start_new_thread(utils.send_message, (msg, server.CHANNEL_PORT))
                     self.leader_id_lock.release()
