@@ -4,6 +4,7 @@ import random
 import string
 import time
 import hashlib
+import os
 
 BUFFER_SIZE = 65536
 
@@ -48,7 +49,7 @@ def get_hash(transactions, nonce):
     return hashlib.sha3_256(will_encode.encode('utf-8')).hexdigest()
 
 
-def read_first_blockchain(file_path):
+def read_first_blockchain():
     def prepare_block(blockchain, transactions, term):
         found = False
         nonce = None
@@ -66,22 +67,27 @@ def read_first_blockchain(file_path):
 
         return {'term': term, 'phash': phash, 'nonce': nonce, 'transactions': transactions}
 
-    blockchain = []
-    with open(file_path, 'r') as _file:
-        term = -1
-        transactions = []
-        for line in _file.readlines():
-            sender, receiver, amount = map(int, tuple(line.split()))
-            transaction_id = time.time()
-            transaction = (transaction_id, (sender, receiver, amount))
-            transactions.append(transaction)
-            if len(transactions) == 3:
-                # block is finished, find nonce...
+    if not os.path.exists('blockchain_processed.pkl'):
+        blockchain = []
+        file_path = 'blockchain.txt'
+        with open(file_path, 'r') as _file:
+            term = -1
+            transactions = []
+            for line in _file.readlines():
+                sender, receiver, amount = map(int, tuple(line.split()))
+                transaction_id = time.time()
+                transaction = (transaction_id, (sender, receiver, amount))
+                transactions.append(transaction)
+                if len(transactions) == 3:
+                    # block is finished, find nonce...
+                    block = prepare_block(blockchain, transactions, term)
+                    blockchain.append(block)
+                    transactions = []
+            if len(transactions) > 0:
+                transactions += [None for _ in range(3 - len(transactions))]
                 block = prepare_block(blockchain, transactions, term)
                 blockchain.append(block)
-                transactions = []
-        if len(transactions) > 0:
-            transactions += [None for _ in range(3 - len(transactions))]
-            block = prepare_block(blockchain, transactions, term)
-            blockchain.append(block)
-    return blockchain
+
+        with open('blockchain_processed.pkl', 'wb') as _fb:
+            pickle.dump(blockchain, _fb)
+
