@@ -13,6 +13,7 @@ import utils
 import math
 from collections import deque
 from heapq import heapify, heappush, heappop
+import json
 
 
 class Server:
@@ -47,9 +48,6 @@ class Server:
                 print('Wrong server name. Please enter 0, 1 or 2.')
 
         # Initialize blockchains, balance tables, proof of work working area, etc.
-
-        # State file name
-        self.state_file_path = f'./state_server_{self.server_id}.pkl'
 
         # Server state.
         self.server_state = 'Follower'  # Follower, Leader, Candidate
@@ -103,62 +101,41 @@ class Server:
         self.commit_watches = []
         self.commit_watches_lock = Lock()
 
-    def __getstate__(self):
-        return dict((k, v) for (k, v) in self.__dict__.items() if self.is_picklable(k))
+    def save_state(self, variable_names):
+        state = self.__dict__
+        for variable_name in variable_names:
 
-    # is variable picklable
-    def is_picklable(self, key):
-        not_picklable = {'sockets'}
-        if key in not_picklable or 'lock' in key:
-            return False
-        return True
+            lock = state.get(f'{variable_name}_lock', None)
+            if lock:
+                lock.acquire()
 
-    # Save the state
-    def save_the_state(self):
-        # Lock the variables and save then unlock
-        self.server_state_lock.acquire()
-        self.leader_id_lock.acquire()
-        self.server_term_lock.acquire()
-        self.servers_operation_last_seen_lock.acquire()
-        self.servers_log_next_index_lock.acquire()
-        self.accept_indexes_lock.acquire()
-        self.commit_index_lock.acquire()
-        self.last_election_time_lock.acquire()
-        self.voted_candidate_lock.acquire()
-        self.received_votes_lock.acquire()
-        self.blockchain_lock.acquire()
-        self.balance_table_lock.acquire()
-        self.transaction_queue_lock.acquire()
-        self.transaction_ids_lock.acquire()
-        self.commit_watches_lock.acquire()
+            value = state[variable_name]
+            if variable_name == 'transaction_queue':
+                jso_object = {variable_name: list(value)}
+            elif variable_name == 'transaction_ids':
+                jso_object = {variable_name: list(value)}
+            else:
+                jso_object = {variable_name: value}
 
-        with open(self.state_file_path, 'wb') as _file:
-            pickle.dump(self.__getstate__(), _file, 2)
+            with open(f'./state_server_{self.server_id}/{variable_name}.json', 'w') as _file:
+                json.dump(jso_object, _file)
 
-        self.server_state_lock.release()
-        self.leader_id_lock.release()
-        self.server_term_lock.release()
-        self.servers_operation_last_seen_lock.release()
-        self.servers_log_next_index_lock.release()
-        self.accept_indexes_lock.release()
-        self.commit_index_lock.release()
-        self.last_election_time_lock.release()
-        self.voted_candidate_lock.release()
-        self.received_votes_lock.release()
-        self.blockchain_lock.release()
-        self.balance_table_lock.release()
-        self.transaction_queue_lock.release()
-        self.transaction_ids_lock.release()
-        self.commit_watches_lock.release()
+            if lock:
+                lock.release()
 
-    # Load the state
-    def load_the_state(self):
-        if os.path.exists(self.state_file_path):
-            with open(self.state_file_path, 'rb') as _file:
-                tmp_dict = pickle.load(_file)
-            self.__dict__.update(tmp_dict)
-            return True
-        return False
+    def load_state(self, variable_names):
+        for variable_name in variable_names:
+            path = f'./state_server_{self.server_id}/{variable_name}.json'
+            if os.path.exists(path):
+                with open(path, 'r') as _file:
+                    state = dict(json.load(_file))
+
+                if 'transaction_queue' in state.keys():
+                    state['transaction_queue'] = deque(state['transaction_queue'])
+                elif 'transaction_ids' in state.keys():
+                    state['transaction_ids'] = set(state['transaction_ids'])
+
+                self.__dict__.update(state)
 
     # Operation utilities.
     def generate_operation_response_message(self, receiver, last_log_index_after_append, success):
@@ -866,8 +843,16 @@ class Server:
     def start(self):
         # Start the listeners for messages and timeout watches.
 
+        # creating persistence folder
+        if not os.path.exists(f'state_server_{self.server_id}'):
+            os.makedirs(f'state_server_{self.server_id}')
+
         # Load the state, if any.
-        result = self.load_the_state()
+        will_be_loaded_states = ['server_state', 'leader_id', 'server_term', 'servers_operation_last_seen', 'servers_log_next_index'
+                                 'accept_indexes', 'commit_index', 'last_election_time', 'voted_candidate', 'received_votes'
+                                 'blockchain', 'first_blockchain_read', 'balance_table', 'transaction_queue', 'transaction_ids',
+                                 'commit_watches']
+        self.load_state(will_be_loaded_states)
 
         # TODO: do we have to update other things here?
         if not self.first_blockchain_read:
