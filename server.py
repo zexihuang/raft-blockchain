@@ -102,13 +102,16 @@ class Server:
         self.commit_watches = []
         self.commit_watches_lock = Lock()
 
+        states_will_be_saved = []
+        self.save_state()
+
     def save_state(self, variable_names):
         state = self.__dict__
         for variable_name in variable_names:
 
-            lock = state.get(f'{variable_name}_lock', None)
-            if lock:
-                lock.acquire()
+            # lock = state.get(f'{variable_name}_lock', None)
+            # if lock:
+            #     lock.acquire()
 
             value = state[variable_name]
             if variable_name == 'transaction_queue':
@@ -118,15 +121,15 @@ class Server:
             else:
                 jso_object = {variable_name: value}
 
-            with open(f'./state_server_{self.server_id}/{variable_name}.json', 'w') as _file:
+            with open(f'state_server_{self.server_id}/{variable_name}.json', 'w') as _file:
                 json.dump(jso_object, _file)
 
-            if lock:
-                lock.release()
+            # if lock:
+            #     lock.release()
 
     def load_state(self, variable_names):
         for variable_name in variable_names:
-            path = f'./state_server_{self.server_id}/{variable_name}.json'
+            path = f'state_server_{self.server_id}/{variable_name}.json'
             if os.path.exists(path):
                 with open(path, 'r') as _file:
                     state = dict(json.load(_file))
@@ -191,6 +194,7 @@ class Server:
                     self.transaction_ids.add(transaction_id)
                 else:
                     self.transaction_ids.remove(transaction_id)
+                self.save_state(['transaction_ids'])
         self.transaction_ids_lock.release()
 
     def on_receive_operation_request(self, sender, message):
@@ -208,12 +212,16 @@ class Server:
 
             if message['term'] > self.server_term:
                 self.voted_candidate = None
+                self.save_state(['voted_candidate'])
             self.server_term = message['term']
+            self.save_state(['server_term'])
 
             if self.server_state != 'Follower':
                 self.server_state = 'Follower'
+                self.save_state(['server_state'])
                 print(f'Follower! Term: {self.server_term}')
             self.leader_id = message['leader_id']
+            self.save_state(['leader_id'])
 
             if len(message['entries']) > 0:  # append message
                 print(message)
@@ -235,12 +243,14 @@ class Server:
                             self.blockchain = self.blockchain[:prev_log_index + i + 1]
                             self.blockchain.append(entry)
                             self.update_transaction_ids(entry)
+                    self.save_state(['blockchain'])
                     success = True
                     print(f'Follower: Before commit balance table: {self.balance_table}')
                     # update commit index depends on given message, and commit the previous entries
                     if self.commit_index < message['commit_index']:  # If not, the block has been already committed.
                         first_commit_index = self.commit_index
                         self.commit_index = min(len(self.blockchain) - 1, message['commit_index'])
+                        self.save_state(['commit_index'])
                         for i in range(first_commit_index + 1, self.commit_index + 1):
                             block = self.blockchain[i]
                             print(f'Committing: {i}, {block}')
@@ -275,14 +285,17 @@ class Server:
 
             if self.accept_indexes[sender] < last_log_index_after_append:
                 self.accept_indexes[sender] = last_log_index_after_append
+                self.save_state(['accept_indexes'])
 
                 sorted_accept_indexes = sorted(self.accept_indexes)
 
                 target_accept_index = sorted_accept_indexes[int((len(sorted_accept_indexes) - 1) / 2)]
                 if self.blockchain[target_accept_index]['term'] == self.server_term:
                     self.commit_index = target_accept_index
+                    self.save_state(['commit_index'])
 
             self.servers_log_next_index[sender] = len(self.blockchain)
+            self.save_state(['servers_log_next_index'])
 
             self.commit_index_lock.release()
             self.accept_indexes_lock.release()
@@ -300,6 +313,7 @@ class Server:
             print(f'Follower! Term: {self.server_term}')
             self.server_term = term
             self.voted_candidate = None
+            self.save_state(['server_state', 'server_term', 'voted_candidate'])
 
             self.voted_candidate_lock.release()
             self.server_state_lock.release()
@@ -312,6 +326,7 @@ class Server:
 
         if not success and self.server_state == "Leader":  # index problem, retry
             self.servers_log_next_index[sender] -= 1
+            self.save_state(['servers_log_next_index'])
             start_new_thread(self.threaded_response_watch, (sender,))
             start_new_thread(self.threaded_send_append_request, ([sender],))
         self.server_state_lock.release()
@@ -388,6 +403,8 @@ class Server:
             heappush(self.commit_watches, block_index)
             start_new_thread(self.threaded_commit_watch, (block_index,))
 
+        self.save_state(['server_state', 'servers_log_next_index', 'leader_id', 'transaction_queue', 'commit_watches'])
+
         self.commit_watches_lock.release()
         self.transaction_queue_lock.release()
         self.server_term_lock.release()
@@ -416,6 +433,7 @@ class Server:
         # Update the last updated time.
         self.last_election_time_lock.acquire()
         self.last_election_time = time.time()
+        self.save_state(['last_election_time'])
         self.last_election_time_lock.release()
 
         timeout = random.uniform(Server.LEADER_ELECTION_TIMEOUT, Server.LEADER_ELECTION_TIMEOUT * 2)
@@ -455,6 +473,8 @@ class Server:
         self.received_votes = 1
         self.leader_id = None
         msgs = [self.generate_vote_request_message(receiver) for receiver in self.other_servers]
+
+        self.save_state(['server_term', 'server_state', 'voted_candidate', 'received_votes', 'leader_id'])
 
         self.server_state_lock.release()
         self.server_term_lock.release()
@@ -507,6 +527,8 @@ class Server:
             vote = False
         msg = self.generate_vote_response_message(message['candidate_id'], vote)
 
+        self.save_state(['server_term', 'server_state', 'voted_candidate'])
+
         self.server_term_lock.release()
         self.server_state_lock.release()
         self.voted_candidate_lock.release()
@@ -541,6 +563,8 @@ class Server:
 
         if become_leader and self.server_state != 'Leader':
             start_new_thread(self.threaded_become_leader, ())
+
+        self.save_state(['server_term', 'server_state', 'received_votes', 'last_election_time'])
 
         self.server_term_lock.release()
         self.received_votes_lock.release()
@@ -608,6 +632,7 @@ class Server:
             sender, receiver, amount = transaction_content
             self.balance_table[sender] -= amount
             self.balance_table[receiver] += amount
+            self.save_state(['balance_table'])
 
     def commit_block(self, block, lock_balance_table=True):
         if lock_balance_table:
@@ -652,6 +677,9 @@ class Server:
                 # Remove the commit watch from the commit watch list.
                 heappop(self.commit_watches)
                 self.blockchain_lock.release()
+
+            self.save_state(['commit_watches'])
+
             self.commit_index_lock.release()
             self.commit_watches_lock.release()
             self.server_state_lock.release()
@@ -791,9 +819,11 @@ class Server:
                     # Call commit watch.
                     self.commit_watches_lock.acquire()
                     heappush(self.commit_watches, block_index)
+                    self.save_state(['commit_watches'])
                     self.commit_watches_lock.release()
                     start_new_thread(self.threaded_commit_watch, (block_index,))
 
+                    self.save_state(['blockchain', 'accept_indexes'])
                     self.accept_indexes_lock.release()
                     self.blockchain_lock.release()
                     self.server_term_lock.release()
@@ -824,6 +854,7 @@ class Server:
             if transaction_id not in self.transaction_ids:  # Transactions hasn't been processed yet.
                 self.transaction_ids.add(transaction_id)
                 self.transaction_queue.append(transaction)
+                self.save_state(['transaction_ids', 'transaction_queue'])
             self.transaction_ids_lock.release()
             self.transaction_queue_lock.release()
 
@@ -853,19 +884,21 @@ class Server:
             os.makedirs(f'state_server_{self.server_id}')
 
         # Load the state, if any.
-        will_be_loaded_states = ['server_state', 'leader_id', 'server_term', 'servers_operation_last_seen', 'servers_log_next_index'
-                                 'accept_indexes', 'commit_index', 'last_election_time', 'voted_candidate', 'received_votes'
-                                 'blockchain', 'first_blockchain_read', 'balance_table', 'transaction_queue', 'transaction_ids',
-                                 'commit_watches']
-        self.load_state(will_be_loaded_states)
+        persistent_states = ['server_state', 'leader_id', 'server_term', 'servers_operation_last_seen', 'servers_log_next_index',
+                             'accept_indexes', 'commit_index', 'last_election_time', 'voted_candidate', 'received_votes', 'blockchain',
+                             'first_blockchain_read', 'balance_table', 'transaction_queue', 'transaction_ids', 'commit_watches']
+        self.load_state(persistent_states)
 
-        # TODO: do we have to update other things here?
         if not self.first_blockchain_read:
-            with open('blockchain_processed.pkl', 'rb') as _fb:
+            with open('first_blockchain_processed.pkl', 'rb') as _fb:
                 self.blockchain = pickle.load(_fb)
             self.commit_index = len(self.blockchain) - 1
             self.first_blockchain_read = True
             self.balance_table = self.get_estimate_balance_table(from_scratch=True)
+            self.servers_log_next_index = [len(self.blockchain), len(self.blockchain), len(self.blockchain)]
+            self.accept_indexes = [self.commit_index, self.commit_index, self.commit_index]
+
+        self.save_state(persistent_states)
 
         # Start/Resume operations based on the server state.
         threads = [(self.start_client_listener, ()), (self.start_vote_listener, ()), (self.start_operation_listener, ())]
@@ -878,6 +911,7 @@ class Server:
                 threads.append((self.threaded_commit_watch, commit_watch))
         for (thread, args) in threads:
             start_new_thread(thread, args)
+        print(f'{self.server_state}! Term: {self.server_term}')
 
         while 1:
             pass

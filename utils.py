@@ -67,9 +67,9 @@ def read_first_blockchain():
 
         return {'term': term, 'phash': phash, 'nonce': nonce, 'transactions': transactions}
 
-    if not os.path.exists('blockchain_processed.pkl'):
+    if not os.path.exists('first_blockchain_processed.pkl'):
         blockchain = []
-        file_path = 'blockchain.txt'
+        file_path = 'first_blockchain.txt'
         with open(file_path, 'r') as _file:
             term = -1
             transactions = []
@@ -88,6 +88,6 @@ def read_first_blockchain():
                 block = prepare_block(blockchain, transactions, term)
                 blockchain.append(block)
 
-        with open('blockchain_processed.pkl', 'wb') as _fb:
+        with open('first_blockchain_processed.pkl', 'wb') as _fb:
             pickle.dump(blockchain, _fb)
 
