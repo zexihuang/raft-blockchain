@@ -22,6 +22,8 @@ class Client:
     MAX_CONNECTION = 100
     BUFFER_SIZE = 65536
 
+    CLIENT_TRANSACTION_TIMEOUT = 10
+
     def __init__(self):
 
         # Get the client name.
@@ -64,7 +66,7 @@ class Client:
     def threaded_response_watch(self, transaction_id, msg):
         # Resend request if the response for a certain transaction msg timeout.
 
-        timeout = random.uniform(5.0, 10.0)
+        timeout = random.uniform(Client.CLIENT_TRANSACTION_TIMEOUT, Client.CLIENT_TRANSACTION_TIMEOUT*2)
         time.sleep(timeout)
         self.transaction_receipts_lock.acquire()
         if transaction_id not in self.transaction_receipts:  # Resend request and restart timeout.
