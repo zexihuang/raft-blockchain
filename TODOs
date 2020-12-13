@@ -8,6 +8,8 @@ TODO:
    Note: However, if at that time, the default server itself is elected as an leader, he will "relay" it to itself, which may not work if he's partitioned out.
    But that should not affect too much since the client will resend and he will receive as leader.
 3) Persistent states.
+   -> Save after every vote/operation/client receive is done
+   -> Crash during acquire, will lock we released, we need to check this...
 7) a) BUG: after a leader sets receive the accept message from a majority and sets its own commit index to 5,
    it dies immediately before sending out an append request with a new commit index. Therefore, none of its follower has
    updated their commit index to 5, let's say they are still 3. Then, one of the followers becomes the new leader, and the

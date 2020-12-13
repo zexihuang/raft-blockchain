@@ -91,7 +91,7 @@ class Server:
         self.first_blockchain_read = False
         self.blockchain_lock = Lock()
 
-        self.balance_table = [10, 10, 10]
+        self.balance_table = [100, 100, 100]
         self.balance_table_lock = Lock()
 
         self.transaction_queue = deque()
@@ -102,6 +102,16 @@ class Server:
 
         self.commit_watches = []
         self.commit_watches_lock = Lock()
+
+    def __getstate__(self):
+        return dict((k, v) for (k, v) in self.__dict__.items() if self.is_picklable(k))
+
+    # is variable picklable
+    def is_picklable(self, key):
+        not_picklable = {'sockets'}
+        if key in not_picklable or 'lock' in key:
+            return False
+        return True
 
     # Save the state
     def save_the_state(self):
@@ -123,7 +133,7 @@ class Server:
         self.commit_watches_lock.acquire()
 
         with open(self.state_file_path, 'wb') as _file:
-            pickle.dump(self.__dict__, _file, 2)
+            pickle.dump(self.__getstate__(), _file, 2)
 
         self.server_state_lock.release()
         self.leader_id_lock.release()
@@ -340,6 +350,8 @@ class Server:
             self.on_receive_operation_response(sender, message)
         else:
             raise NotImplementedError(f'Header {header} is not related!')
+
+        self.save_the_state()
 
     def threaded_response_watch(self, receiver):
         # Watch whether we receive response for a specific normal operation message sent. If not, resend the message.
@@ -577,6 +589,8 @@ class Server:
         else:
             raise NotImplementedError(f'Header {header} is not related!')
 
+        self.save_the_state()
+
     def start_vote_listener(self):
         # Start listener for vote messages.
 
@@ -696,7 +710,7 @@ class Server:
             self.blockchain_lock.acquire()
 
         balance_table_copy = copy.deepcopy(self.balance_table)
-        estimated_balance_table = [10, 10, 10]
+        estimated_balance_table = [100, 100, 100]
         if from_scratch:
             # assuming everyone has 10-10-10 in the beginning
             balance_table_diff = get_balance_table_change(self.blockchain, start_index=0)
@@ -839,6 +853,8 @@ class Server:
                     break
                 self.leader_id_lock.release()
 
+        self.save_the_state()
+
     def start_client_listener(self):
         # Start listener for client messages.
 
@@ -859,6 +875,7 @@ class Server:
                 self.blockchain = pickle.load(_fb)
             self.commit_index = len(self.blockchain) - 1
             self.first_blockchain_read = True
+            self.balance_table = self.get_estimate_balance_table(from_scratch=True)
 
         # Start/Resume operations based on the server state.
         threads = [(self.start_client_listener, ()), (self.start_vote_listener, ()), (self.start_operation_listener, ())]
