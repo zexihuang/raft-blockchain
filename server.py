@@ -102,9 +102,6 @@ class Server:
         self.commit_watches = []
         self.commit_watches_lock = Lock()
 
-        states_will_be_saved = []
-        self.save_state()
-
     def save_state(self, variable_names):
         state = self.__dict__
         for variable_name in variable_names:
@@ -121,7 +118,7 @@ class Server:
             else:
                 jso_object = {variable_name: value}
 
-            with open(f'state_server_{self.server_id}/{variable_name}.json', 'w') as _file:
+            with open(f'server_{self.server_id}_states/{variable_name}.json', 'w') as _file:
                 json.dump(jso_object, _file)
 
             # if lock:
@@ -129,7 +126,7 @@ class Server:
 
     def load_state(self, variable_names):
         for variable_name in variable_names:
-            path = f'state_server_{self.server_id}/{variable_name}.json'
+            path = f'server_{self.server_id}_states/{variable_name}.json'
             if os.path.exists(path):
                 with open(path, 'r') as _file:
                     state = dict(json.load(_file))
@@ -774,6 +771,7 @@ class Server:
                     self.balance_table_lock.release()
                     start_new_thread(self.threaded_send_client_response,
                                      (transaction, (False, balance, estimated_balance)))
+                self.save_state(['transaction_queue'])
             self.transaction_queue_lock.release()
 
             # Do proof of work if transactions are not empty.
@@ -880,8 +878,8 @@ class Server:
         # Start the listeners for messages and timeout watches.
 
         # creating persistence folder
-        if not os.path.exists(f'state_server_{self.server_id}'):
-            os.makedirs(f'state_server_{self.server_id}')
+        if not os.path.exists(f'server_{self.server_id}_states'):
+            os.makedirs(f'server_{self.server_id}_states')
 
         # Load the state, if any.
         persistent_states = ['server_state', 'leader_id', 'server_term', 'servers_operation_last_seen', 'servers_log_next_index',
