@@ -125,7 +125,7 @@ class Client:
     @staticmethod
     def get_transaction(sender):
         try:
-            action = input('Receiver;Amount of Transaction (use a;b format ) or Balance?. \n')
+            action = input('Receiver;Amount of Transaction (use a;b format).\n')
             receiver, amount = tuple(action.split(';'))
             receiver, amount = int(receiver), int(amount)
             if receiver == sender:

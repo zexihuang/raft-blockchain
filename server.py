@@ -248,16 +248,16 @@ class Server:
                             self.blockchain.append(entry)
                             self.update_transaction_ids(entry)
                     success = True
-                    print(f'Before commit balance table: {self.balance_table}')
+                    print(f'Follower: Before commit balance table: {self.balance_table}')
                     # update commit index depends on given message, and commit the previous entries
-                    first_commit_index = self.commit_index
-                    self.commit_index = min(len(self.blockchain)-1, message['commit_index'])
-                    print(self.commit_index)
-                    for i in range(first_commit_index + 1, self.commit_index + 1):
-                        block = self.blockchain[i]
-                        print(f'block: {block}')
-                        self.commit_block(block)
-                    print(f'After commit balance table: {self.balance_table}')
+                    if self.commit_index < message['commit_index']:  # If not, the block has been already committed.
+                        first_commit_index = self.commit_index
+                        self.commit_index = min(len(self.blockchain)-1, message['commit_index'])
+                        for i in range(first_commit_index + 1, self.commit_index + 1):
+                            block = self.blockchain[i]
+                            print(f'Committing: {i}, {block}')
+                            self.commit_block(block)
+                    print(f'Follower: After commit balance table: {self.balance_table}')
                 else:
                     success = False
                 print(f'Blockchain after: {self.blockchain}')
@@ -278,7 +278,6 @@ class Server:
         term = message['term']
         last_log_index_after_append = message['last_log_index_after_append']
         success = message['success']
-        print(message)
         if success:
             self.servers_log_next_index_lock.acquire()
             self.server_term_lock.acquire()
@@ -645,9 +644,11 @@ class Server:
             self.commit_watches_lock.acquire()
             if self.commit_index >= block_index == self.commit_watches[0]:
                 self.blockchain_lock.acquire()
-                # if self.commit_index < len(self.blockchain):
+                print(f'Leader: Before commit balance table: {self.balance_table}')
                 block = self.blockchain[block_index]
+                print(f'Committing: {block_index}, {block}')
                 self.commit_block(block)
+                print(f'Leader: After commit balance table: {self.balance_table}')
                 self.send_clients_responses(block)
                 sent = True
                 # Remove the commit watch from the commit watch list.
