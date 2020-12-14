@@ -573,7 +573,8 @@ class Server:
         acquired_by = 'ACQUIRED by ' + func_name
         released_by = 'RELEASED by ' + func_name
 
-        timeout = random.uniform(Server.MESSAGE_SENDING_TIMEOUT, Server.MESSAGE_SENDING_TIMEOUT * 2)
+        self.logger.info('Response watch starts, ', time.time())
+        timeout = random.uniform(Server.MESSAGE_SENDING_TIMEOUT, Server.MESSAGE_SENDING_TIMEOUT*2)
         time.sleep(timeout)
 
         self.servers_operation_last_seen_lock.acquire()
@@ -581,7 +582,7 @@ class Server:
         self.save_state(['servers_operation_last_seen_lock_by'])
 
         if time.time() - self.servers_operation_last_seen[receiver] >= timeout:  # timed out, resend
-            start_new_thread(self.threaded_response_watch, (receiver,))
+            # start_new_thread(self.threaded_response_watch, (receiver,))
             start_new_thread(self.threaded_send_append_request, ([receiver],))
 
         self.servers_operation_last_seen_lock_by = released_by
@@ -605,6 +606,7 @@ class Server:
                 # start_new_thread(self.threaded_on_receive_operation, ())
                 self.logger.info(f'Sending append request {msg} to {receiver}')
                 start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+                start_new_thread(self.threaded_response_watch, (receiver, ))
 
         self.server_state_lock_by = released_by
         self.save_state(['server_state_lock_by'])
