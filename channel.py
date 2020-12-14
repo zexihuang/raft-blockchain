@@ -47,14 +47,15 @@ class Channel:
 
         # Set up loggers.
         log_file = f'channel.log'
-        if os.path.exists(log_file):
-            os.remove(log_file)
+        # if os.path.exists(log_file):
+        #     os.remove(log_file)
         self.logger = logging.getLogger('Channel')
         file_handler = logging.FileHandler(log_file)
         formatter = logging.Formatter('%(asctime)s %(message)s', "%H:%M:%S")
         file_handler.setFormatter(formatter)
         self.logger.addHandler(file_handler)
         self.logger.setLevel(logging.INFO)
+        self.logger.info("==============================================STARTING==============================================")
 
     def threaded_on_receive(self, connection):
         # Relay the message from the sender to the receiver.
@@ -86,7 +87,8 @@ class Channel:
                 receiver_port = Channel.SERVER_PORTS[receiver][2]
 
             try:
-                print(header, sender, receiver, message, receiver_port)
+                log_msg = f'{header} {sender} {receiver} {message} {receiver_port}'
+                self.logger.info(log_msg)
                 utils.send_message((header, sender, receiver, message), receiver_port)
             except Exception as e:
                 self.logger.info(e)

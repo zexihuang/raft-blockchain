@@ -91,3 +91,14 @@ def read_first_blockchain():
         with open('first_blockchain_processed.pkl', 'wb') as _fb:
             pickle.dump(blockchain, _fb)
 
+
+def blockchain_print_format(blockchain):
+    blockchain_str = ""
+    for i, block in enumerate(blockchain):
+        term = block['term']
+        transactions = block['transactions']
+        new_block_str = f'[({term}) {[transaction[1] for transaction in transactions if transaction is not None]}]'
+        if i < len(blockchain) - 1:
+            new_block_str += ' -> '
+        blockchain_str += new_block_str
+    return blockchain_str

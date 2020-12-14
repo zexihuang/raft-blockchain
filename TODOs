@@ -14,6 +14,9 @@ TODO:
 2) BUG (but has no negative effect though): some transactions in the blockchain are list of list, e.g.,
    'transactions': [[1607927796.1254094, [2, 1, 50]], None, None]}, others are tuple of tuple, e.g.,
    'transactions': [(1607928493.9130206, (2,)), None, None]. You can find those in the committing and receiving messages.
+   -> It will be list in the json format always, when we read the states from the files, some blockchains will be list, some will be tuple
+   -> Let's keep this format I guess, it won't hurt. If we don't want to keep it, we have to make everything list. Reading state and make
+   everything is tuple is a headache I guess.
 3) BUG: When a leader is elected/resurrected, should he try to send an append request for his latest entry (if not committed)
    to everyone else? Actually, a better idea would be if he rises to leader (either elected/resurrected) and
    he has at least one block that is committed, he should also start a threaded_response_watch for every other node. In
@@ -21,3 +24,7 @@ TODO:
    he will not receive the response and it will timeout to send a new append request.
 4) TODO: Do whatever extreme case tests.
 5) TODO: Optimize the terminal printing.
+   -> Channel relaying message printing into log instead of console.
+   -> Logger for clients: Now resending, changing leader etc is logging into file.
+   -> We don't remove logs this time if exists when starting, instead, we add some seperator between different runs.
+   -> Server log, terminal printing polished. We can further discuss where to print other things.

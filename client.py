@@ -42,6 +42,18 @@ class Client:
         self.transaction_receipts = set()
         self.transaction_receipts_lock = Lock()
 
+        # Set up loggers.
+        log_file = f'client_{self.client_id}.log'
+        # if os.path.exists(log_file):
+        #     os.remove(log_file)
+        self.logger = logging.getLogger(f'Client_{self.client_id}')
+        file_handler = logging.FileHandler(log_file)
+        formatter = logging.Formatter('%(asctime)s %(message)s', "%H:%M:%S")
+        file_handler.setFormatter(formatter)
+        self.logger.addHandler(file_handler)
+        self.logger.setLevel(logging.INFO)
+        self.logger.info("==============================================STARTING==============================================")
+
     def generate_client_request_message(self, transaction):
         header = 'Client-Request'
         sender = self.client_id
@@ -61,20 +73,20 @@ class Client:
         transaction = (transaction_id, transaction_content)
         msg = self.generate_client_request_message(transaction)
         start_new_thread(utils.send_message, (msg, Client.CHANNEL_PORT))
-        start_new_thread(self.threaded_response_watch, (transaction, ))
+        start_new_thread(self.threaded_response_watch, (transaction,))
 
     def threaded_response_watch(self, transaction):
         # Resend request if the response for a certain transaction msg timeout.
 
-        timeout = random.uniform(Client.CLIENT_TRANSACTION_TIMEOUT, Client.CLIENT_TRANSACTION_TIMEOUT*2)
+        timeout = random.uniform(Client.CLIENT_TRANSACTION_TIMEOUT, Client.CLIENT_TRANSACTION_TIMEOUT * 2)
         time.sleep(timeout)
         self.transaction_receipts_lock.acquire()
         transaction_id = transaction[0]
         if transaction_id not in self.transaction_receipts:  # Resend request and restart timeout.
             msg = self.generate_client_request_message(transaction)
-            print(f'Resending {msg}')
+            self.logger.info(f'Resending {msg}')
             start_new_thread(utils.send_message, (msg, Client.CHANNEL_PORT))
-            start_new_thread(self.threaded_response_watch, (transaction, ))
+            start_new_thread(self.threaded_response_watch, (transaction,))
 
         self.transaction_receipts_lock.release()
 
@@ -85,7 +97,7 @@ class Client:
 
         self.leader_id_guess_lock.acquire()
         if self.leader_id_guess != sender:
-            print(f'Changing leader guess from {self.leader_id_guess} to {sender}')
+            self.logger.info(f'Changing leader guess from {self.leader_id_guess} to {sender}')
             self.leader_id_guess = sender
         self.leader_id_guess_lock.release()
 
@@ -98,11 +110,16 @@ class Client:
                 result = message['result']
                 if len(transaction_content) == 1:  # Balance transaction
                     print('Balance transaction successful')
+                    self.logger.info('Balance transaction successful')
                     print(f'Your ({transaction_content[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
+                    self.logger.info(f'Your ({transaction_content[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
                 else:  # Transfer transaction.
                     print(f'Transfer transaction from you ({transaction_content[0]}) to {transaction_content[1]} with amount {transaction_content[2]}$ is '
                           f'{"successful" if result[0] else "unsuccessful"}.')
+                    self.logger.info(f'Transfer transaction from you ({transaction_content[0]}) to {transaction_content[1]} with amount {transaction_content[2]}$ is '
+                                     f'{"successful" if result[0] else "unsuccessful"}.')
                     print(f'Your ({transaction_content[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
+                    self.logger.info(f'Your ({transaction_content[0]}) committed balance is {result[1]}, pending balance is: {result[2]}\n')
 
             self.transaction_receipts_lock.release()
 
@@ -156,7 +173,7 @@ class Client:
                     if transaction == -1:
                         transaction = None
                 elif action == '2':  # Balance
-                    transaction = (self.client_id, )
+                    transaction = (self.client_id,)
                 else:  # Exit
                     transaction = None
                     done = True

@@ -16,6 +16,7 @@ from heapq import heapify, heappush, heappop
 import json
 import sys
 
+
 class Server:
     CHANNEL_PORT = 10000
     SERVER_PORTS = {
@@ -118,6 +119,18 @@ class Server:
         self.transaction_ids = set()
         self.transaction_ids_lock = Lock()
         self.transaction_ids_lock_by = ''
+
+        # Set up loggers.
+        log_file = f'server_{self.server_id}.log'
+        # if os.path.exists(log_file):
+        #     os.remove(log_file)
+        self.logger = logging.getLogger(f'Server_{self.server_id}')
+        file_handler = logging.FileHandler(log_file)
+        formatter = logging.Formatter('%(asctime)s %(message)s', "%H:%M:%S")
+        file_handler.setFormatter(formatter)
+        self.logger.addHandler(file_handler)
+        self.logger.setLevel(logging.INFO)
+        self.logger.info("==============================================STARTING==============================================")
 
     def save_state(self, variable_names):
         state = self.__dict__
@@ -283,18 +296,21 @@ class Server:
             if self.server_state != 'Follower':
                 self.server_state = 'Follower'
                 self.save_state(['server_state'])
-                print(f'Follower! Term: {self.server_term} because of on_receive_operation_request')
+                print(f'Becomes Follower for Term: {self.server_term}')
+                self.logger.info(f'Follower! Term: {self.server_term} because of on_receive_operation_request')
             self.leader_id = message['leader_id']
             self.save_state(['leader_id'])
 
             if len(message['entries']) > 0:  # append message
-                print(message)
+                print(f'Append RPC from Server {sender}')
+                self.logger.info(message)
 
                 self.blockchain_lock.acquire()
                 self.blockchain_lock_by = acquired_by
                 self.save_state(['blockchain_lock_by'])
 
-                print(f'Blockchain before: {self.blockchain}')
+                print(f'Blockchain before Append RPC: {utils.blockchain_print_format(self.blockchain)}')
+                self.logger.info(f'Blockchain before Append RPC: {self.blockchain}')
                 prev_log_index = message['previous_log_index']
                 if prev_log_index == -1 or \
                         (len(self.blockchain) > prev_log_index and
@@ -314,6 +330,7 @@ class Server:
                     self.save_state(['blockchain'])
                     success = True
                     print(f'Follower: Before commit balance table: {self.balance_table}')
+                    self.logger.info(f'Follower: Before commit balance table: {self.balance_table}')
                     # update commit index depends on given message, and commit the previous entries
                     if self.commit_index < message['commit_index']:  # If not, the block has been already committed.
                         first_commit_index = self.commit_index
@@ -321,12 +338,15 @@ class Server:
                         self.save_state(['commit_index'])
                         for i in range(first_commit_index + 1, self.commit_index + 1):
                             block = self.blockchain[i]
-                            print(f'Committing: {i}, {block}')
+                            print(f'Committing: Block index: {i}, Block: {utils.blockchain_print_format([block])}')
+                            self.logger.info(f'Committing: Block index: {i}, Block: {block}')
                             self.commit_block(block)
                     print(f'Follower: After commit balance table: {self.balance_table}')
+                    self.logger.info(f'Follower: After commit balance table: {self.balance_table}')
                 else:
                     success = False
-                print(f'Blockchain after: {self.blockchain}')
+                print(f'Blockchain after Append RPC: {utils.blockchain_print_format(self.blockchain)}')
+                self.logger.info(f'Blockchain after Append RPC: {self.blockchain}')
                 last_log_index_after_append = len(self.blockchain) - 1
 
                 self.blockchain_lock_by = released_by
@@ -335,6 +355,8 @@ class Server:
 
                 msg = self.generate_operation_response_message(sender, last_log_index_after_append, success=success)
                 start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+            else:  # heartbeat
+                self.logger.info(f'Heartbeat from Server {sender}')
 
             start_new_thread(self.threaded_leader_election_watch, ())
 
@@ -438,9 +460,10 @@ class Server:
             # success = False
 
             self.server_state = 'Follower'
-            print(f'Follower! Term: {self.server_term} because of on_receive_operation_response')
             self.server_term = term
             self.voted_candidate = None
+            print(f'Becomes Follower for Term: {self.server_term}')
+            self.logger.info(f'Follower! Term: {self.server_term} because of on_receive_operation_response')
             self.save_state(['server_state', 'server_term', 'voted_candidate'])
 
             start_new_thread(self.threaded_leader_election_watch, ())
@@ -483,7 +506,7 @@ class Server:
         # Receive and process append request/response and heartbeat messages.
 
         header, sender, receiver, message = utils.receive_message(connection)
-
+        self.logger.info(f"Received {header} from Server {sender}: {message}")
         if header == 'Operation-Request':
             self.on_receive_operation_request(sender, message)
         elif header == 'Operation-Response':
@@ -562,7 +585,8 @@ class Server:
             self.server_state_lock_by = acquired_by
             self.save_state(['server_state_lock_by'])
 
-        print('Step down from leader. Heartbeat stops. ')
+        print('Step down from leader. Heartbeat stops.')
+        self.logger.info('Step down from leader. Heartbeat stops.')
 
         self.server_state_lock_by = released_by
         self.save_state(['server_state_lock_by'])
@@ -607,7 +631,8 @@ class Server:
         self.transaction_queue_lock_by = acquired_by
         self.save_state(['transaction_queue_lock_by'])
 
-        print(f'Leader! Term: {self.server_term}')
+        print(f'Becomes Leader for Term: {self.server_term}')
+        self.logger.info(f'Leader! Term: {self.server_term}')
         self.server_state = 'Leader'
         self.servers_log_next_index = 3 * [len(self.blockchain)]
         self.leader_id = self.server_id
@@ -681,7 +706,7 @@ class Server:
         self.last_election_time = time.time()
         self.save_state(['last_election_time'])
 
-        print(f'threaded_leader_election_watch: {self.last_election_time}')
+        self.logger.info(f'Election watch time is started: {self.last_election_time}')
 
         self.last_election_time_lock_by = released_by
         self.save_state(['last_election_time_lock_by'])
@@ -695,7 +720,6 @@ class Server:
 
         diff = time.time() - self.last_election_time
         if diff >= timeout:
-            print('threaded_on_leader_election_timeout call')
             start_new_thread(self.threaded_on_leader_election_timeout, ())
 
         self.last_election_time_lock_by = released_by
@@ -747,7 +771,8 @@ class Server:
 
         self.server_term += 1
         self.server_state = 'Candidate'
-        print(f'Candidate! Term: {self.server_term}')
+        print(f'Becomes Candidate for Term: {self.server_term}')
+        self.logger.info(f'Candidate! Term: {self.server_term}')
         self.voted_candidate = self.server_id
         self.received_votes = 1
         self.leader_id = None
@@ -821,7 +846,8 @@ class Server:
         # Update term.
         if message['term'] > self.server_term:
             self.server_term = message['term']
-            print(f'Follower! Term: {self.server_term} because of on_receive_vote_request')
+            print(f'Becomes Follower for Term: {self.server_term}')
+            self.logger.info(f'Follower! Term: {self.server_term} because of on_receive_vote_request')
             self.server_state = 'Follower'
             self.voted_candidate = None
             reset_leader_election = True
@@ -892,7 +918,8 @@ class Server:
 
         if message['term'] > self.server_term:  # Discover higher term.
             self.server_term = message['term']
-            print(f'Follower! Term: {self.server_term} because of on_receive_vote_response')
+            print(f'Becomes Follower for Term: {self.server_term}')
+            self.logger.info(f'Follower! Term: {self.server_term} because of on_receive_vote_response')
             self.server_state = 'Follower'
 
         if self.server_state == 'Candidate':  # Hasn't stepped down yet.
@@ -927,7 +954,7 @@ class Server:
         # Receive and process the vote request/response messages.
 
         header, sender, receiver, message = utils.receive_message(connection)
-
+        self.logger.info(f"Received {header} from Server {sender}: {message}")
         if header == 'Vote-Request':
             self.on_receive_vote_request(message)
         elif header == 'Vote-Response':
@@ -1050,6 +1077,7 @@ class Server:
 
         sent = False
         print(f'Commit watch started for block index {block_index}')
+        self.logger.info(f'Commit watch started for block index {block_index}')
         self.server_state_lock.acquire()
         self.server_state_lock_by = acquired_by
         self.save_state(['server_state_lock_by'])
@@ -1065,16 +1093,18 @@ class Server:
             self.save_state(['commit_watches_lock_by'])
 
             if self.commit_index >= block_index == self.commit_watches[0]:
-
                 self.blockchain_lock.acquire()
                 self.blockchain_lock_by = acquired_by
                 self.save_state(['blockchain_lock_by'])
 
                 print(f'Leader: Before commit balance table: {self.balance_table}')
+                self.logger.info(f'Leader: Before commit balance table: {self.balance_table}')
                 block = self.blockchain[block_index]
-                print(f'Committing: {block_index}, {block}')
+                print(f'Committing: Block index: {block_index}, Block: {utils.blockchain_print_format([block])}')
+                self.logger.info(f'Committing: Block index: {block_index}, Block: {block}')
                 self.commit_block(block)
                 print(f'Leader: After commit balance table: {self.balance_table}')
+                self.logger.info(f'Leader: After commit balance table: {self.balance_table}')
                 self.send_clients_responses(block)
                 sent = True
                 # Remove the commit watch from the commit watch list.
@@ -1140,6 +1170,7 @@ class Server:
                             table_diff[sender] -= amount
                             table_diff[receiver] += amount
             return table_diff
+
         if lock_commit_table:
             self.commit_index_lock.acquire()
             self.commit_index_lock_by = acquired_by
@@ -1154,7 +1185,6 @@ class Server:
             self.balance_table_lock.acquire()
             self.balance_table_lock_by = acquired_by
             self.save_state(['balance_table_lock_by'])
-
 
         balance_table_copy = copy.deepcopy(self.balance_table)
         estimated_balance_table = [100, 100, 100]
@@ -1198,7 +1228,7 @@ class Server:
         nonce = None
         found = False
         estimated_balance_table = self.get_estimate_balance_table()
-        print(f'estimated_balance_table: {estimated_balance_table}')
+        # print(f'estimated_balance_table: {estimated_balance_table}')
 
         self.server_state_lock.acquire()
         self.server_state_lock_by = acquired_by
@@ -1215,9 +1245,9 @@ class Server:
             self.save_state(['transaction_queue_lock_by'])
 
             while len(transactions) < Server.MAX_TRANSACTION_COUNT and len(self.transaction_queue) > 0:
-                print(f'before transaction: {self.transaction_queue}')
+                # print(f'before transaction: {self.transaction_queue}')
                 transaction = self.transaction_queue.popleft()
-                print(f'after transaction: {self.transaction_queue}')
+                # print(f'after transaction: {self.transaction_queue}')
 
                 self.transaction_queue_lock_by = released_by
                 self.save_state(['transaction_queue_lock_by'])
@@ -1292,12 +1322,13 @@ class Server:
                     while len(transactions) < Server.MAX_TRANSACTION_COUNT:
                         transactions.append(None)
 
-                    self.blockchain.append({
+                    block = {
                         'term': self.server_term,
                         'phash': phash,
                         'nonce': nonce,
                         'transactions': transactions,
-                    })
+                    }
+                    self.blockchain.append(block)
 
                     self.accept_indexes[self.server_id] = len(self.blockchain) - 1
 
@@ -1329,12 +1360,14 @@ class Server:
                     self.save_state(['blockchain_lock_by'])
                     self.blockchain_lock.release()
 
+                    print("Proof of work is done.")
+                    self.logger.info(f'Proof of work is done for block: {block}')
+
                     # Reset proof of work variables.
                     transactions = []
                     nonce = None
                     found = False
                     estimated_balance_table = self.get_estimate_balance_table()
-                    print("PoW done!")
 
                 self.server_state_lock_by = released_by
                 self.save_state(['server_state_lock_by'])
@@ -1358,6 +1391,7 @@ class Server:
         released_by = 'RELEASED by ' + func_name
 
         header, sender, receiver, message = utils.receive_message(connection)
+        self.logger.info(f"Received {header} from Client {sender}: {message}")
 
         self.server_state_lock.acquire()
         self.server_state_lock_by = acquired_by
@@ -1459,7 +1493,8 @@ class Server:
                 threads.append((self.threaded_commit_watch, (commit_watch,)))
         for (thread, args) in threads:
             start_new_thread(thread, args)
-        print(f'{self.server_state}! Term: {self.server_term}')
+        print(f'Starts as {self.server_state} for Term: {self.server_term}')
+        self.logger.info(f'Starts as {self.server_state}! Term: {self.server_term}')
 
         while 1:
             pass
@@ -1468,4 +1503,3 @@ class Server:
 if __name__ == '__main__':
     server = Server()
     server.start()
-
