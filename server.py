@@ -389,6 +389,17 @@ class Server:
         term = message['term']
         last_log_index_after_append = message['last_log_index_after_append']
         success = message['success']
+
+        self.servers_operation_last_seen_lock.acquire()
+        self.servers_operation_last_seen_lock_by = acquired_by
+        self.save_state(['servers_operation_last_seen_lock_by'])
+
+        self.servers_operation_last_seen[sender] = time.time()
+
+        self.servers_operation_last_seen_lock_by = released_by
+        self.save_state(['servers_operation_last_seen_lock_by'])
+        self.servers_operation_last_seen_lock.release()
+
         if success:
             self.server_term_lock.acquire()
             self.server_term_lock_by = acquired_by
@@ -569,7 +580,7 @@ class Server:
         self.servers_operation_last_seen_lock_by = acquired_by
         self.save_state(['servers_operation_last_seen_lock_by'])
 
-        if time.time() - self.servers_operation_last_seen[receiver] > timeout:  # timed out, resend
+        if time.time() - self.servers_operation_last_seen[receiver] >= timeout:  # timed out, resend
             start_new_thread(self.threaded_response_watch, (receiver,))
             start_new_thread(self.threaded_send_append_request, ([receiver],))
 
@@ -592,6 +603,7 @@ class Server:
             for receiver in receivers:
                 msg = self.generate_operation_request_message(receiver)
                 # start_new_thread(self.threaded_on_receive_operation, ())
+                self.logger.info(f'Sending append request {msg} to {receiver}')
                 start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
         self.server_state_lock_by = released_by
