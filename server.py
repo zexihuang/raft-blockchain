@@ -460,6 +460,7 @@ class Server:
     def threaded_on_leader_election_timeout(self):
         # Send request for votes.
 
+        print(0)
         self.server_state_lock.acquire()
         print(1)
         self.leader_id_lock.acquire()
@@ -695,6 +696,7 @@ class Server:
             self.commit_index_lock.release()
             self.commit_watches_lock.release()
             self.server_state_lock.release()
+            # TODO: check
             self.server_state_lock.acquire()
         self.server_state_lock.release()
 
