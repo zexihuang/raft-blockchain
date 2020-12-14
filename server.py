@@ -507,8 +507,8 @@ class Server:
     def on_receive_vote_request(self, message):
         # Receive and process vote request.
 
-        self.server_term_lock.acquire()
         self.server_state_lock.acquire()
+        self.server_term_lock.acquire()
         self.voted_candidate_lock.acquire()
         self.blockchain_lock.acquire()
 
@@ -540,8 +540,8 @@ class Server:
 
         self.save_state(['server_term', 'server_state', 'voted_candidate'])
 
-        self.server_term_lock.release()
         self.server_state_lock.release()
+        self.server_term_lock.release()
         self.voted_candidate_lock.release()
         self.blockchain_lock.release()
 
@@ -555,8 +555,8 @@ class Server:
 
         self.server_state_lock.acquire()
         self.server_term_lock.acquire()
-        self.received_votes_lock.acquire()
         self.last_election_time_lock.acquire()
+        self.received_votes_lock.acquire()
 
         become_leader = False
 
@@ -725,13 +725,13 @@ class Server:
                             table_diff[sender] -= amount
                             table_diff[receiver] += amount
             return table_diff
-
-        if lock_balance_table:
-            self.balance_table_lock.acquire()
         if lock_commit_table:
             self.commit_index_lock.acquire()
         if lock_blockchain:
             self.blockchain_lock.acquire()
+        if lock_balance_table:
+            self.balance_table_lock.acquire()
+
 
         balance_table_copy = copy.deepcopy(self.balance_table)
         estimated_balance_table = [100, 100, 100]
@@ -867,9 +867,9 @@ class Server:
 
             transaction = message['transaction']
             transaction_id = transaction[0]
-
-            self.transaction_ids_lock.acquire()
             self.transaction_queue_lock.acquire()
+            self.transaction_ids_lock.acquire()
+
             if transaction_id not in self.transaction_ids:  # Transactions hasn't been processed yet.
                 self.transaction_ids.add(transaction_id)
                 self.transaction_queue.append(transaction)
@@ -905,8 +905,8 @@ class Server:
 
         # Load the state, if any.
         persistent_states = ['server_state', 'leader_id', 'server_term', 'servers_operation_last_seen', 'servers_log_next_index',
-                             'accept_indexes', 'commit_index', 'last_election_time', 'voted_candidate', 'received_votes', 'blockchain',
-                             'first_blockchain_read', 'balance_table', 'transaction_queue', 'transaction_ids', 'commit_watches']
+                             'accept_indexes', 'commit_index', 'commit_watches', 'last_election_time', 'voted_candidate', 'received_votes', 'blockchain',
+                             'first_blockchain_read', 'balance_table', 'transaction_queue', 'transaction_ids']
         self.load_state(persistent_states)
 
         if not self.first_blockchain_read:
