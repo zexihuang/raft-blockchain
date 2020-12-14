@@ -157,8 +157,8 @@ class Server:
         sender = self.server_id
 
         self.server_term_lock.acquire()
-        self.commit_index_lock.acquire()
         self.servers_log_next_index_lock.acquire()
+        self.commit_index_lock.acquire()
         self.blockchain_lock.acquire()
 
         next_log_index = self.servers_log_next_index[receiver]
@@ -174,10 +174,10 @@ class Server:
             'commit_index': self.commit_index
         }
 
-        self.servers_log_next_index_lock.release()
-        self.blockchain_lock.release()
-        self.commit_index_lock.release()
         self.server_term_lock.release()
+        self.servers_log_next_index_lock.release()
+        self.commit_index_lock.release()
+        self.blockchain_lock.release()
 
         return header, sender, receiver, message
 
@@ -195,11 +195,11 @@ class Server:
         self.transaction_ids_lock.release()
 
     def on_receive_operation_request(self, sender, message):
-        self.server_term_lock.acquire()
-        self.voted_candidate_lock.acquire()
         self.server_state_lock.acquire()
         self.leader_id_lock.acquire()
+        self.server_term_lock.acquire()
         self.commit_index_lock.acquire()
+        self.voted_candidate_lock.acquire()
         if message['term'] < self.server_term:
             # reject message because term is smaller.
             msg = self.generate_operation_response_message(sender, None, success=False)
@@ -264,21 +264,21 @@ class Server:
             start_new_thread(self.threaded_leader_election_watch, ())
 
         self.server_state_lock.release()
-        self.voted_candidate_lock.release()
         self.leader_id_lock.release()
-        self.commit_index_lock.release()
         self.server_term_lock.release()
+        self.commit_index_lock.release()
+        self.voted_candidate_lock.release()
 
     def on_receive_operation_response(self, sender, message):
         term = message['term']
         last_log_index_after_append = message['last_log_index_after_append']
         success = message['success']
         if success:
-            self.servers_log_next_index_lock.acquire()
             self.server_term_lock.acquire()
-            self.blockchain_lock.acquire()
+            self.servers_log_next_index_lock.acquire()
             self.accept_indexes_lock.acquire()
             self.commit_index_lock.acquire()
+            self.blockchain_lock.acquire()
 
             if self.accept_indexes[sender] < last_log_index_after_append:
                 self.accept_indexes[sender] = last_log_index_after_append
@@ -294,17 +294,17 @@ class Server:
             self.servers_log_next_index[sender] = len(self.blockchain)
             self.save_state(['servers_log_next_index'])
 
-            self.commit_index_lock.release()
-            self.accept_indexes_lock.release()
-            self.blockchain_lock.release()
             self.server_term_lock.release()
             self.servers_log_next_index_lock.release()
+            self.accept_indexes_lock.release()
+            self.commit_index_lock.release()
+            self.blockchain_lock.release()
 
+        self.server_state_lock.acquire()
         self.server_term_lock.acquire()
+        self.voted_candidate_lock.acquire()
         if term > self.server_term:
             # success = False
-            self.server_state_lock.acquire()
-            self.voted_candidate_lock.acquire()
 
             self.server_state = 'Follower'
             print(f'Follower! Term: {self.server_term} because of on_receive_operation_response')
@@ -312,11 +312,10 @@ class Server:
             self.voted_candidate = None
             self.save_state(['server_state', 'server_term', 'voted_candidate'])
 
-            self.voted_candidate_lock.release()
-            self.server_state_lock.release()
-
             start_new_thread(self.threaded_leader_election_watch, ())
+        self.server_state_lock.release()
         self.server_term_lock.release()
+        self.voted_candidate_lock.release()
 
         self.server_state_lock.acquire()
         self.servers_log_next_index_lock.acquire()
@@ -347,9 +346,9 @@ class Server:
         time.sleep(timeout)
         self.servers_operation_last_seen_lock.acquire()
         if time.time() - self.servers_operation_last_seen[receiver] > timeout:  # timed out, resend
-            self.servers_operation_last_seen_lock.release()
             start_new_thread(self.threaded_response_watch, (receiver,))
             start_new_thread(self.threaded_send_append_request, ([receiver],))
+        self.servers_operation_last_seen_lock.release()
 
     def threaded_send_append_request(self, receivers):
         # Send append requests to followers.
@@ -381,13 +380,13 @@ class Server:
         # Initialize the next index, last log index, send the first heartbeat.
 
         self.server_state_lock.acquire()
-        self.servers_log_next_index_lock.acquire()
-        self.blockchain_lock.acquire()
         self.leader_id_lock.acquire()
         self.server_term_lock.acquire()
-        self.transaction_queue_lock.acquire()
-        self.commit_watches_lock.acquire()
+        self.servers_log_next_index_lock.acquire()
         self.commit_index_lock.acquire()
+        self.commit_watches_lock.acquire()
+        self.blockchain_lock.acquire()
+        self.transaction_queue_lock.acquire()
 
         print(f'Leader! Term: {self.server_term}')
         self.server_state = 'Leader'
@@ -403,14 +402,14 @@ class Server:
 
         self.save_state(['server_state', 'servers_log_next_index', 'leader_id', 'transaction_queue', 'commit_watches'])
 
-        self.commit_watches_lock.release()
-        self.transaction_queue_lock.release()
-        self.server_term_lock.release()
-        self.blockchain_lock.release()
-        self.servers_log_next_index_lock.release()
         self.server_state_lock.release()
         self.leader_id_lock.release()
+        self.server_term_lock.release()
+        self.servers_log_next_index_lock.release()
         self.commit_index_lock.release()
+        self.commit_watches_lock.release()
+        self.blockchain_lock.release()
+        self.transaction_queue_lock.release()
 
         start_new_thread(self.threaded_send_heartbeat, ())
         start_new_thread(self.threaded_proof_of_work, ())
@@ -463,15 +462,15 @@ class Server:
 
         self.server_state_lock.acquire()
         print(1)
-        self.server_term_lock.acquire()
+        self.leader_id_lock.acquire()
         print(2)
-        self.blockchain_lock.acquire()
+        self.server_term_lock.acquire()
         print(3)
         self.voted_candidate_lock.acquire()
         print(4)
         self.received_votes_lock.acquire()
         print(5)
-        self.leader_id_lock.acquire()
+        self.blockchain_lock.acquire()
         print(6)
 
         self.server_term += 1
@@ -485,11 +484,11 @@ class Server:
         self.save_state(['server_term', 'server_state', 'voted_candidate', 'received_votes', 'leader_id'])
 
         self.server_state_lock.release()
+        self.leader_id_lock.release()
         self.server_term_lock.release()
-        self.blockchain_lock.release()
         self.voted_candidate_lock.release()
         self.received_votes_lock.release()
-        self.leader_id_lock.release()
+        self.blockchain_lock.release()
 
         for msg in msgs:
             start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
@@ -780,6 +779,7 @@ class Server:
                 print(f'before transaction: {self.transaction_queue}')
                 transaction = self.transaction_queue.popleft()
                 print(f'after transaction: {self.transaction_queue}')
+                self.transaction_queue_lock.release()
                 if Server.is_transaction_valid(estimated_balance_table, transactions, transaction):  # Transaction valid
                     transactions.append(transaction)
                 else:  # Transaction invalid.
@@ -791,6 +791,7 @@ class Server:
                     start_new_thread(self.threaded_send_client_response,
                                      (transaction, (False, balance, estimated_balance)))
                 self.save_state(['transaction_queue'])
+                self.transaction_queue_lock.acquire()
             self.transaction_queue_lock.release()
 
             # Do proof of work if transactions are not empty.
@@ -806,9 +807,10 @@ class Server:
                 if self.server_state == 'Leader':
 
                     # Update the blockchain.
-                    self.blockchain_lock.acquire()
                     self.server_term_lock.acquire()
                     self.accept_indexes_lock.acquire()
+                    self.commit_watches_lock.acquire()
+                    self.blockchain_lock.acquire()
 
                     phash = None
                     if len(self.blockchain) > 0:
@@ -834,16 +836,15 @@ class Server:
                     start_new_thread(self.threaded_send_append_request, (self.other_servers,))
 
                     # Call commit watch.
-                    self.commit_watches_lock.acquire()
                     heappush(self.commit_watches, block_index)
                     self.save_state(['commit_watches'])
-                    self.commit_watches_lock.release()
                     start_new_thread(self.threaded_commit_watch, (block_index,))
 
                     self.save_state(['blockchain', 'accept_indexes'])
-                    self.accept_indexes_lock.release()
-                    self.blockchain_lock.release()
                     self.server_term_lock.release()
+                    self.accept_indexes_lock.release()
+                    self.commit_watches_lock.release()
+                    self.blockchain_lock.release()
 
                     # Reset proof of work variables.
                     transactions = []
@@ -927,7 +928,7 @@ class Server:
             threads.append((self.threaded_send_heartbeat, ()))
             threads.append((self.threaded_proof_of_work, ()))
             for commit_watch in self.commit_watches:
-                threads.append((self.threaded_commit_watch, (commit_watch, )))
+                threads.append((self.threaded_commit_watch, (commit_watch,)))
         for (thread, args) in threads:
             start_new_thread(thread, args)
         print(f'{self.server_state}! Term: {self.server_term}')
