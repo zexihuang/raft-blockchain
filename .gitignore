@@ -2,3 +2,4 @@
 *.pyc
 *.log
 server_*_states
+first_blockchain_processed.pkl
