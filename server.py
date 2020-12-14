@@ -633,7 +633,7 @@ class Server:
         self.save_state(['server_state_lock_by'])
         self.server_state_lock.release()
 
-    def threaded_become_leader(self):
+    def threaded_become_leader(self, term):
         # Initialize the next index, last log index, send the first heartbeat.
 
         func_name = sys._getframe().f_code.co_name
@@ -672,24 +672,24 @@ class Server:
         self.transaction_queue_lock_by = acquired_by
         self.save_state(['transaction_queue_lock_by'])
 
-        print(f'Becomes Leader for Term: {self.server_term}')
-        self.logger.info(f'Leader! Term: {self.server_term}')
-        self.server_state = 'Leader'
-        self.servers_log_next_index = 3 * [len(self.blockchain)]
-        self.leader_id = self.server_id
-        self.transaction_queue = deque()
+        if self.server_term == term:
+            print(f'Becomes Leader for Term: {self.server_term}')
+            self.logger.info(f'Leader! Term: {self.server_term}')
+            self.server_state = 'Leader'
+            self.servers_log_next_index = 3 * [len(self.blockchain)]
+            self.leader_id = self.server_id
+            self.transaction_queue = deque()
 
-        # Checking if there not committed block, so we can try to commit it.
-        # for receiver in self.other_servers:
-        #     self.start_threaded_response_watch(receiver, commit_index_lock=False, blockchain_lock=False)
+            self.commit_watches = []
+            for block_index in range(self.commit_index + 1, len(self.blockchain)):
+                heappush(self.commit_watches, block_index)
+                start_new_thread(self.threaded_commit_watch, (block_index,))
 
-        # Start new commit watch for all uncommitted blocks.
-        self.commit_watches = []
-        for block_index in range(self.commit_index + 1, len(self.blockchain)):
-            heappush(self.commit_watches, block_index)
-            start_new_thread(self.threaded_commit_watch, (block_index,))
+            self.save_state(['server_state', 'servers_log_next_index', 'leader_id', 'transaction_queue', 'commit_watches'])
 
-        self.save_state(['server_state', 'servers_log_next_index', 'leader_id', 'transaction_queue', 'commit_watches'])
+            start_new_thread(self.threaded_send_heartbeat, ())
+            start_new_thread(self.threaded_proof_of_work, ())
+            start_new_thread(self.threaded_announce_leadership_to_clients, ())
 
         self.server_state_lock_by = released_by
         self.save_state(['server_state_lock_by'])
@@ -723,9 +723,6 @@ class Server:
         self.save_state(['transaction_queue_lock_by'])
         self.transaction_queue_lock.release()
 
-        start_new_thread(self.threaded_send_heartbeat, ())
-        start_new_thread(self.threaded_proof_of_work, ())
-        start_new_thread(self.threaded_announce_leadership_to_clients, ())
 
     def start_operation_listener(self):
         # Start listener for operation messages.
@@ -975,7 +972,7 @@ class Server:
                 self.last_election_time = time.time()  # Update the last election time to avoid previous timeout watches. Don't start new timeout watch.
 
         if become_leader and self.server_state != 'Leader':
-            start_new_thread(self.threaded_become_leader, ())
+            start_new_thread(self.threaded_become_leader, (self.server_term, ))
 
         self.save_state(['server_term', 'server_state', 'received_votes', 'last_election_time'])
 
