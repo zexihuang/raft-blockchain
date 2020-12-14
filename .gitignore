@@ -1,3 +1,4 @@
 .idea
 *.pyc
 *.log
+server_*_states
