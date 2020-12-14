@@ -514,6 +514,47 @@ class Server:
         else:
             raise NotImplementedError(f'Header {header} is not related!')
 
+    def start_threaded_response_watch(self, receiver, commit_index_lock=True, blockchain_lock=True, servers_log_next_index=True):
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
+        if servers_log_next_index:
+            self.servers_log_next_index_lock.acquire()
+            self.servers_log_next_index_lock_by = acquired_by
+            self.save_state(['servers_log_next_index_lock_by'])
+
+        if commit_index_lock:
+            self.commit_index_lock.acquire()
+            self.commit_watches_lock_by = acquired_by
+            self.save_state(['commit_watches_lock_by'])
+
+        if blockchain_lock:
+            self.blockchain_lock.acquire()
+            self.blockchain_lock_by = acquired_by
+            self.save_state(['blockchain_lock_by'])
+
+        if self.commit_index < len(self.blockchain) - 1 and self.servers_log_next_index[receiver] < len(self.blockchain):
+            # at least one index is not committed
+            # print('Leader: Uncommitted blocks are detected... Sending request to servers...')
+            self.logger.info('Leader: Uncommitted blocks are detected... Sending request to servers...')
+            start_new_thread(self.threaded_response_watch, (receiver,))
+
+        if servers_log_next_index:
+            self.servers_log_next_index_lock_by = released_by
+            self.save_state(['servers_log_next_index_lock_by'])
+            self.servers_log_next_index_lock.release()
+
+        if commit_index_lock:
+            self.commit_watches_lock_by = released_by
+            self.save_state(['commit_watches_lock_by'])
+            self.commit_index_lock.release()
+
+        if blockchain_lock:
+            self.blockchain_lock_by = released_by
+            self.save_state(['blockchain_lock_by'])
+            self.blockchain_lock.release()
+
     def threaded_response_watch(self, receiver):
         # Watch whether we receive response for a specific normal operation message sent. If not, resend the message.
 
@@ -638,7 +679,11 @@ class Server:
         self.leader_id = self.server_id
         self.transaction_queue = deque()
 
-        # Start new commit watch for all uncomitted blocks.
+        # Checking if there not committed block, so we can try to commit it.
+        # for receiver in self.other_servers:
+        #     self.start_threaded_response_watch(receiver, commit_index_lock=False, blockchain_lock=False)
+
+        # Start new commit watch for all uncommitted blocks.
         self.commit_watches = []
         for block_index in range(self.commit_index + 1, len(self.blockchain)):
             heappush(self.commit_watches, block_index)
@@ -1491,6 +1536,8 @@ class Server:
             threads.append((self.threaded_proof_of_work, ()))
             for commit_watch in self.commit_watches:
                 threads.append((self.threaded_commit_watch, (commit_watch,)))
+            for receiver in self.other_servers:
+                threads.append((self.start_threaded_response_watch, (receiver,)))
         for (thread, args) in threads:
             start_new_thread(thread, args)
         print(f'Starts as {self.server_state} for Term: {self.server_term}')

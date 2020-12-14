@@ -19,7 +19,7 @@ TODO:
    everything is tuple is a headache I guess.
 3) BUG: When a leader is elected/resurrected, should he try to send an append request for his latest entry (if not committed)
    to everyone else? Actually, a better idea would be if he rises to leader (either elected/resurrected) and
-   he has at least one block that is committed, he should also start a threaded_response_watch for every other node. In
+   he has at least one block that is not committed, he should also start a threaded_response_watch for every other node. In
    this case, if he didn't die for long, he may still receive the client's response and process. If he dies for a long time,
    he will not receive the response and it will timeout to send a new append request.
 4) TODO: Do whatever extreme case tests.
