@@ -61,6 +61,8 @@ class Channel:
 
         header, sender, receiver, message = utils.receive_message(connection)
 
+        # print(header, sender, receiver, message)
+
         # Based on the header and network configuration, decides whether to relay the message.
         if header in ('Client-Request', 'Client-Response'):  # Always relay messages between a client and a server.
             relay = True
@@ -84,6 +86,7 @@ class Channel:
                 receiver_port = Channel.SERVER_PORTS[receiver][2]
 
             try:
+                print(header, sender, receiver, message, receiver_port)
                 utils.send_message((header, sender, receiver, message), receiver_port)
             except Exception as e:
                 self.logger.info(e)
@@ -96,14 +99,14 @@ class Channel:
             connection, (ip, port) = self.socket.accept()
             start_new_thread(self.threaded_on_receive, (connection,))
 
-    @staticmethod
-    def get_partition_config():
+    def get_partition_config(self):
 
         cur = [True, True, True]
         config = input('\nHow do you partition? (use format: a;b-c, a and b in the same partition): ')
         partitions = config.split("-")
 
         # check if the input is valid:
+        self.lock.acquire()
         seen = set()
         for partition in partitions:
             for node in partition.split(";"):
@@ -111,9 +114,11 @@ class Channel:
                     seen.add(int(node))
                 else:
                     print('Config format is wrong')
+                    self.lock.release()
                     return cur
         if len(seen) < 3:
             print("Config format in wrong")
+            self.lock.release()
             return cur
 
         # format is valid, check partition
@@ -126,6 +131,7 @@ class Channel:
                 cur[int(partitions[0])] = False
             else:
                 cur[int(partitions[1])] = False
+        self.lock.release()
         return cur
 
     def configuration_change_handler(self):

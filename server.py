@@ -216,7 +216,7 @@ class Server:
             if self.server_state != 'Follower':
                 self.server_state = 'Follower'
                 self.save_state(['server_state'])
-                print(f'Follower! Term: {self.server_term}')
+                print(f'Follower! Term: {self.server_term} because of on_receive_operation_request')
             self.leader_id = message['leader_id']
             self.save_state(['leader_id'])
 
@@ -307,7 +307,7 @@ class Server:
             self.voted_candidate_lock.acquire()
 
             self.server_state = 'Follower'
-            print(f'Follower! Term: {self.server_term}')
+            print(f'Follower! Term: {self.server_term} because of on_receive_operation_response')
             self.server_term = term
             self.voted_candidate = None
             self.save_state(['server_state', 'server_term', 'voted_candidate'])
@@ -367,6 +367,7 @@ class Server:
         while self.server_state == 'Leader':
             # heartbeat broadcast
             for receiver in self.other_servers:
+                # print(f'Sending heartbeat to {receiver}')
                 msg = self.generate_operation_request_message(receiver, is_heartbeat=True)
                 # start_new_thread(self.threaded_on_receive_operation, ())
                 start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
@@ -431,6 +432,9 @@ class Server:
         self.last_election_time_lock.acquire()
         self.last_election_time = time.time()
         self.save_state(['last_election_time'])
+
+        print(f'threaded_leader_election_watch: {self.last_election_time}')
+
         self.last_election_time_lock.release()
 
         timeout = random.uniform(Server.LEADER_ELECTION_TIMEOUT, Server.LEADER_ELECTION_TIMEOUT * 2)
@@ -438,6 +442,7 @@ class Server:
         self.last_election_time_lock.acquire()
         diff = time.time() - self.last_election_time
         if diff >= timeout:
+            print('threaded_on_leader_election_timeout call')
             start_new_thread(self.threaded_on_leader_election_timeout, ())
         self.last_election_time_lock.release()
 
@@ -457,11 +462,17 @@ class Server:
         # Send request for votes.
 
         self.server_state_lock.acquire()
+        print(1)
         self.server_term_lock.acquire()
+        print(2)
         self.blockchain_lock.acquire()
+        print(3)
         self.voted_candidate_lock.acquire()
+        print(4)
         self.received_votes_lock.acquire()
+        print(5)
         self.leader_id_lock.acquire()
+        print(6)
 
         self.server_term += 1
         self.server_state = 'Candidate'
@@ -502,12 +513,15 @@ class Server:
         self.voted_candidate_lock.acquire()
         self.blockchain_lock.acquire()
 
+        reset_leader_election = False
+
         # Update term.
         if message['term'] > self.server_term:
             self.server_term = message['term']
-            print(f'Follower! Term: {self.server_term}')
+            print(f'Follower! Term: {self.server_term} because of on_receive_vote_request')
             self.server_state = 'Follower'
             self.voted_candidate = None
+            reset_leader_election = True
 
         # Decide whether to cast vote.
         last_log_term = self.blockchain[-1]['term'] if len(self.blockchain) > 0 else -1
@@ -518,6 +532,7 @@ class Server:
                  or (last_log_term == message['last_log_term'] and len(self.blockchain) - 1 > message['last_log_index'])):
 
             vote = True
+            reset_leader_election = True
             self.voted_candidate = message['candidate_id']
 
         else:
@@ -533,7 +548,7 @@ class Server:
 
         # Send message and reset election timeout if vote.
         start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
-        if vote:
+        if reset_leader_election:
             start_new_thread(self.threaded_leader_election_watch, ())
 
     def on_receive_vote_response(self, message):
@@ -548,7 +563,7 @@ class Server:
 
         if message['term'] > self.server_term:  # Discover higher term.
             self.server_term = message['term']
-            print(f'Follower! Term: {self.server_term}')
+            print(f'Follower! Term: {self.server_term} because of on_receive_vote_response')
             self.server_state = 'Follower'
 
         if self.server_state == 'Candidate':  # Hasn't stepped down yet.
@@ -658,6 +673,7 @@ class Server:
     def threaded_commit_watch(self, block_index):
         # Inform the client if the transaction's block has been committed.
         sent = False
+        print(f'Commit watch started for block index {block_index}')
         self.server_state_lock.acquire()
         while not sent and self.server_state == 'Leader':
             self.commit_index_lock.acquire()
@@ -751,16 +767,19 @@ class Server:
         nonce = None
         found = False
         estimated_balance_table = self.get_estimate_balance_table()
+        print(f'estimated_balance_table: {estimated_balance_table}')
 
         self.server_state_lock.acquire()
         while self.server_state == 'Leader':
             self.server_state_lock.release()
-
+            # print(f'server_state: Leader')
             # Add new transactions to current proof of work.
 
             self.transaction_queue_lock.acquire()
             while len(transactions) < Server.MAX_TRANSACTION_COUNT and len(self.transaction_queue) > 0:
+                print(f'before transaction: {self.transaction_queue}')
                 transaction = self.transaction_queue.popleft()
+                print(f'after transaction: {self.transaction_queue}')
                 if Server.is_transaction_valid(estimated_balance_table, transactions, transaction):  # Transaction valid
                     transactions.append(transaction)
                 else:  # Transaction invalid.
@@ -842,6 +861,7 @@ class Server:
         # Receive transaction request from client.
 
         header, sender, receiver, message = utils.receive_message(connection)
+        self.server_state_lock.acquire()
         if self.server_state == 'Leader':  # Process the request.
 
             transaction = message['transaction']
@@ -865,6 +885,7 @@ class Server:
                     self.leader_id_lock.release()
                     break
                 self.leader_id_lock.release()
+        self.server_state_lock.release()
 
     def start_client_listener(self):
         # Start listener for client messages.
@@ -906,7 +927,7 @@ class Server:
             threads.append((self.threaded_send_heartbeat, ()))
             threads.append((self.threaded_proof_of_work, ()))
             for commit_watch in self.commit_watches:
-                threads.append((self.threaded_commit_watch, commit_watch))
+                threads.append((self.threaded_commit_watch, (commit_watch, )))
         for (thread, args) in threads:
             start_new_thread(thread, args)
         print(f'{self.server_state}! Term: {self.server_term}')
