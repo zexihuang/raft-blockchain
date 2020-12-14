@@ -2,20 +2,22 @@ Done:
 1) Leader's previous log is to be overwritten after steps downs.
 2) Transfer transaction test
 5) Commit watch with several blocks commited at the same time, without ordering requirement.
-TODO:
 6) When nobody is the leader and the client sends a request.
-   Note: There is no problem for this case. The default server will wait until a leader is elected and then relayed.
-   Note: However, if at that time, the default server itself is elected as an leader, he will "relay" it to itself, which may not work if he's partitioned out.
-   But that should not affect too much since the client will resend and he will receive as leader.
 3) Persistent states.
-   -> Save after every vote/operation/client receive is done
-   -> Crash during acquire, will lock we released, we need to check this...
-7) a) BUG: after a leader sets receive the accept message from a majority and sets its own commit index to 5,
-   it dies immediately before sending out an append request with a new commit index. Therefore, none of its follower has
-   updated their commit index to 5, let's say they are still 3. Then, one of the followers becomes the new leader, and the
-   old leader joins back as the follower.
-   b) FIXED by comparing current commit index with the message commit index before committing as a follower.
 4) Reading first blockchain file, and populate blockchain with that.
-    -> Channel reads blockchain.txt and turned into blockchain_processed.pkl, then servers are reading that pkl file to make sure
-    their blockchains are same.
-    -> We need to initialize some variable like commit_index etc based on blockchain.
+
+TODO:
+0) Note: Every lock is now a persistent state, you can find in the states folder that which lock is still acquired by which function
+   or is last released by which function. Make use of this functionality to deal with any deadlocks.
+1) TODO: Go through the code whether there is any other places that could lead to pseudo deadlock by releasing a lock and
+   acquire it immediately in a while loop. Add time.sleep(Server.SLEEP_INTERVAL) between them to solve.
+2) BUG (but has no negative effect though): some transactions in the blockchain are list of list, e.g.,
+   'transactions': [[1607927796.1254094, [2, 1, 50]], None, None]}, others are tuple of tuple, e.g.,
+   'transactions': [(1607928493.9130206, (2,)), None, None]. You can find those in the committing and receiving messages.
+3) BUG: When a leader is elected/resurrected, should he try to send an append request for his latest entry (if not committed)
+   to everyone else? Actually, a better idea would be if he rises to leader (either elected/resurrected) and
+   he has at least one block that is committed, he should also start a threaded_response_watch for every other node. In
+   this case, if he didn't die for long, he may still receive the client's response and process. If he dies for a long time,
+   he will not receive the response and it will timeout to send a new append request.
+4) TODO: Do whatever extreme case tests.
+5) TODO: Optimize the terminal printing.

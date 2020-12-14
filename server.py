@@ -14,7 +14,7 @@ import math
 from collections import deque
 from heapq import heapify, heappush, heappop
 import json
-
+import sys
 
 class Server:
     CHANNEL_PORT = 10000
@@ -33,6 +33,8 @@ class Server:
     HEARTBEAT_TIMEOUT = 1
 
     MAX_TRANSACTION_COUNT = 3
+
+    SLEEP_INTERVAL = 0.01
 
     def __init__(self):
         # Get the server name.
@@ -53,62 +55,73 @@ class Server:
         # Server state.
         self.server_state = 'Follower'  # Follower, Leader, Candidate
         self.server_state_lock = Lock()
+        self.server_state_lock_by = ''
 
         self.leader_id = None
         self.leader_id_lock = Lock()
+        self.leader_id_lock_by = ''
 
         # Server term.
         self.server_term = 0
         self.server_term_lock = Lock()
+        self.server_term_lock_by = ''
 
         # State variables for operation.
         self.servers_operation_last_seen = [time.time(), time.time(), time.time()]
         self.servers_operation_last_seen_lock = Lock()
+        self.servers_operation_last_seen_lock_by = ''
 
         self.servers_log_next_index = [0, 0, 0]
         self.servers_log_next_index_lock = Lock()
+        self.servers_log_next_index_lock_by = ''
 
         self.accept_indexes = [-1, -1, -1]
         self.accept_indexes_lock = Lock()
+        self.accept_indexes_lock_by = ''
 
         self.commit_index = -1
         self.commit_index_lock = Lock()
+        self.commit_index_lock_by = ''
+
+        self.commit_watches = []
+        self.commit_watches_lock = Lock()
+        self.commit_watches_lock_by = ''
 
         # State variables for vote.
         self.last_election_time = 0
         self.last_election_time_lock = Lock()
+        self.last_election_time_lock_by = ''
 
         self.voted_candidate = None
         self.voted_candidate_lock = Lock()
+        self.voted_candidate_lock_by = ''
 
         self.received_votes = 0
         self.received_votes_lock = Lock()
+        self.received_votes_lock_by = ''
 
         # State variables for client.
         self.blockchain = []  # each block: {'term': ..., 'phash': ..., 'nonce': ...,
         # 'transactions': ((unique_id, (A, B, 5)), ((unique_id, (A,)), None)}
         self.first_blockchain_read = False
         self.blockchain_lock = Lock()
+        self.blockchain_lock_by = ''
 
         self.balance_table = [100, 100, 100]
         self.balance_table_lock = Lock()
+        self.balance_table_lock_by = ''
 
         self.transaction_queue = deque()
         self.transaction_queue_lock = Lock()
+        self.transaction_queue_lock_by = ''
 
         self.transaction_ids = set()
         self.transaction_ids_lock = Lock()
-
-        self.commit_watches = []
-        self.commit_watches_lock = Lock()
+        self.transaction_ids_lock_by = ''
 
     def save_state(self, variable_names):
         state = self.__dict__
         for variable_name in variable_names:
-
-            # lock = state.get(f'{variable_name}_lock', None)
-            # if lock:
-            #     lock.acquire()
 
             value = state[variable_name]
             if variable_name == 'transaction_queue':
@@ -120,9 +133,6 @@ class Server:
 
             with open(f'server_{self.server_id}_states/{variable_name}.json', 'w') as _file:
                 json.dump(jso_object, _file)
-
-            # if lock:
-            #     lock.release()
 
     def load_state(self, variable_names):
         for variable_name in variable_names:
@@ -153,13 +163,29 @@ class Server:
         return header, sender, receiver, message
 
     def generate_operation_request_message(self, receiver, is_heartbeat=False):
+
         header = 'Operation-Request'
         sender = self.server_id
 
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         self.server_term_lock.acquire()
+        self.server_term_lock_by = acquired_by
+        self.save_state(['server_term_lock_by'])
+
         self.servers_log_next_index_lock.acquire()
+        self.servers_log_next_index_lock_by = acquired_by
+        self.save_state(['servers_log_next_index_lock_by'])
+
         self.commit_index_lock.acquire()
+        self.commit_index_lock_by = acquired_by
+        self.save_state(['commit_index_lock_by'])
+
         self.blockchain_lock.acquire()
+        self.blockchain_lock_by = acquired_by
+        self.save_state(['blockchain_lock_by'])
 
         next_log_index = self.servers_log_next_index[receiver]
         previous_log_index = next_log_index - 1
@@ -173,17 +199,35 @@ class Server:
             'entries': [] if is_heartbeat else self.blockchain[next_log_index:],
             'commit_index': self.commit_index
         }
-
+        self.server_term_lock_by = released_by
+        self.save_state(['server_term_lock_by'])
         self.server_term_lock.release()
+
+        self.servers_log_next_index_lock_by = released_by
+        self.save_state(['servers_log_next_index_lock_by'])
         self.servers_log_next_index_lock.release()
+
+        self.commit_index_lock_by = released_by
+        self.save_state(['commit_index_lock_by'])
         self.commit_index_lock.release()
+
+        self.blockchain_lock_by = released_by
+        self.save_state(['blockchain_lock_by'])
         self.blockchain_lock.release()
 
         return header, sender, receiver, message
 
     def update_transaction_ids(self, block, add=True):
         # if add is False, remove transactions ids
+
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         self.transaction_ids_lock.acquire()
+        self.transaction_ids_lock_by = acquired_by
+        self.save_state(['transaction_ids_lock_by'])
+
         for transaction in block['transactions']:
             if transaction is not None:
                 transaction_id = transaction[0]
@@ -192,14 +236,37 @@ class Server:
                 else:
                     self.transaction_ids.remove(transaction_id)
                 self.save_state(['transaction_ids'])
+
+        self.transaction_ids_lock_by = released_by
+        self.save_state(['transaction_ids_lock_by'])
         self.transaction_ids_lock.release()
 
     def on_receive_operation_request(self, sender, message):
+
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         self.server_state_lock.acquire()
+        self.server_state_lock_by = acquired_by
+        self.save_state(['server_state_lock_by'])
+
         self.leader_id_lock.acquire()
+        self.leader_id_lock_by = acquired_by
+        self.save_state(['leader_id_lock_by'])
+
         self.server_term_lock.acquire()
+        self.server_term_lock_by = acquired_by
+        self.save_state(['server_term_lock_by'])
+
         self.commit_index_lock.acquire()
+        self.commit_index_lock_by = acquired_by
+        self.save_state(['commit_index_lock_by'])
+
         self.voted_candidate_lock.acquire()
+        self.voted_candidate_lock_by = acquired_by
+        self.save_state(['voted_candidate_lock_by'])
+
         if message['term'] < self.server_term:
             # reject message because term is smaller.
             msg = self.generate_operation_response_message(sender, None, success=False)
@@ -222,7 +289,11 @@ class Server:
 
             if len(message['entries']) > 0:  # append message
                 print(message)
+
                 self.blockchain_lock.acquire()
+                self.blockchain_lock_by = acquired_by
+                self.save_state(['blockchain_lock_by'])
+
                 print(f'Blockchain before: {self.blockchain}')
                 prev_log_index = message['previous_log_index']
                 if prev_log_index == -1 or \
@@ -257,28 +328,65 @@ class Server:
                     success = False
                 print(f'Blockchain after: {self.blockchain}')
                 last_log_index_after_append = len(self.blockchain) - 1
+
+                self.blockchain_lock_by = released_by
+                self.save_state(['blockchain_lock_by'])
                 self.blockchain_lock.release()
+
                 msg = self.generate_operation_response_message(sender, last_log_index_after_append, success=success)
                 start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
 
             start_new_thread(self.threaded_leader_election_watch, ())
 
+        self.server_state_lock_by = released_by
+        self.save_state(['server_state_lock_by'])
         self.server_state_lock.release()
+
+        self.leader_id_lock_by = released_by
+        self.save_state(['leader_id_lock_by'])
         self.leader_id_lock.release()
+
+        self.server_term_lock_by = released_by
+        self.save_state(['server_term_lock_by'])
         self.server_term_lock.release()
+
+        self.commit_index_lock_by = released_by
+        self.save_state(['commit_index_lock_by'])
         self.commit_index_lock.release()
+
+        self.voted_candidate_lock_by = released_by
+        self.save_state(['voted_candidate_lock_by'])
         self.voted_candidate_lock.release()
 
     def on_receive_operation_response(self, sender, message):
+
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         term = message['term']
         last_log_index_after_append = message['last_log_index_after_append']
         success = message['success']
         if success:
             self.server_term_lock.acquire()
+            self.server_term_lock_by = acquired_by
+            self.save_state(['server_term_lock_by'])
+
             self.servers_log_next_index_lock.acquire()
+            self.servers_log_next_index_lock_by = acquired_by
+            self.save_state(['servers_log_next_index_lock_by'])
+
             self.accept_indexes_lock.acquire()
+            self.accept_indexes_lock_by = acquired_by
+            self.save_state(['accept_indexes_lock_by'])
+
             self.commit_index_lock.acquire()
+            self.commit_index_lock_by = acquired_by
+            self.save_state(['commit_index_lock_by'])
+
             self.blockchain_lock.acquire()
+            self.blockchain_lock_by = acquired_by
+            self.save_state(['blockchain_lock_by'])
 
             if self.accept_indexes[sender] < last_log_index_after_append:
                 self.accept_indexes[sender] = last_log_index_after_append
@@ -294,15 +402,38 @@ class Server:
             self.servers_log_next_index[sender] = len(self.blockchain)
             self.save_state(['servers_log_next_index'])
 
+            self.server_term_lock_by = released_by
+            self.save_state(['server_term_lock_by'])
             self.server_term_lock.release()
+
+            self.servers_log_next_index_lock_by = released_by
+            self.save_state(['servers_log_next_index_lock_by'])
             self.servers_log_next_index_lock.release()
+
+            self.accept_indexes_lock_by = released_by
+            self.save_state(['accept_indexes_lock_by'])
             self.accept_indexes_lock.release()
+
+            self.commit_index_lock_by = released_by
+            self.save_state(['commit_index_lock_by'])
             self.commit_index_lock.release()
+
+            self.blockchain_lock_by = released_by
+            self.save_state(['blockchain_lock_by'])
             self.blockchain_lock.release()
 
         self.server_state_lock.acquire()
+        self.server_state_lock_by = acquired_by
+        self.save_state(['server_state_lock_by'])
+
         self.server_term_lock.acquire()
+        self.server_term_lock_by = acquired_by
+        self.save_state(['server_term_lock_by'])
+
         self.voted_candidate_lock.acquire()
+        self.voted_candidate_lock_by = acquired_by
+        self.save_state(['voted_candidate_lock_by'])
+
         if term > self.server_term:
             # success = False
 
@@ -313,19 +444,39 @@ class Server:
             self.save_state(['server_state', 'server_term', 'voted_candidate'])
 
             start_new_thread(self.threaded_leader_election_watch, ())
+
+        self.server_state_lock_by = released_by
+        self.save_state(['server_state_lock_by'])
         self.server_state_lock.release()
+
+        self.server_term_lock_by = released_by
+        self.save_state(['server_term_lock_by'])
         self.server_term_lock.release()
+
+        self.voted_candidate_lock_by = released_by
+        self.save_state(['voted_candidate_lock_by'])
         self.voted_candidate_lock.release()
 
         self.server_state_lock.acquire()
+        self.server_state_lock_by = acquired_by
+        self.save_state(['server_state_lock_by'])
+
         self.servers_log_next_index_lock.acquire()
+        self.servers_log_next_index_lock_by = acquired_by
+        self.save_state(['servers_log_next_index_lock_by'])
 
         if not success and self.server_state == "Leader":  # index problem, retry
             self.servers_log_next_index[sender] -= 1
             self.save_state(['servers_log_next_index'])
             start_new_thread(self.threaded_response_watch, (sender,))
             start_new_thread(self.threaded_send_append_request, ([sender],))
+
+        self.server_state_lock_by = released_by
+        self.save_state(['server_state_lock_by'])
         self.server_state_lock.release()
+
+        self.servers_log_next_index_lock_by = released_by
+        self.save_state(['servers_log_next_index_lock_by'])
         self.servers_log_next_index_lock.release()
 
     def threaded_on_receive_operation(self, connection):
@@ -342,27 +493,57 @@ class Server:
 
     def threaded_response_watch(self, receiver):
         # Watch whether we receive response for a specific normal operation message sent. If not, resend the message.
+
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         timeout = random.uniform(Server.MESSAGE_SENDING_TIMEOUT, Server.MESSAGE_SENDING_TIMEOUT * 2)
         time.sleep(timeout)
+
         self.servers_operation_last_seen_lock.acquire()
+        self.servers_operation_last_seen_lock_by = acquired_by
+        self.save_state(['servers_operation_last_seen_lock_by'])
+
         if time.time() - self.servers_operation_last_seen[receiver] > timeout:  # timed out, resend
             start_new_thread(self.threaded_response_watch, (receiver,))
             start_new_thread(self.threaded_send_append_request, ([receiver],))
+
+        self.servers_operation_last_seen_lock_by = released_by
+        self.save_state(['servers_operation_last_seen_lock_by'])
         self.servers_operation_last_seen_lock.release()
 
     def threaded_send_append_request(self, receivers):
         # Send append requests to followers.
+
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         self.server_state_lock.acquire()
+        self.server_state_lock_by = acquired_by
+        self.save_state(['server_state_lock_by'])
+
         if self.server_state == 'Leader':
             for receiver in receivers:
                 msg = self.generate_operation_request_message(receiver)
                 # start_new_thread(self.threaded_on_receive_operation, ())
                 start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+
+        self.server_state_lock_by = released_by
+        self.save_state(['server_state_lock_by'])
         self.server_state_lock.release()
 
     def threaded_send_heartbeat(self):
 
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         self.server_state_lock.acquire()
+        self.server_state_lock_by = acquired_by
+        self.save_state(['server_state_lock_by'])
+
         while self.server_state == 'Leader':
             # heartbeat broadcast
             for receiver in self.other_servers:
@@ -370,23 +551,61 @@ class Server:
                 msg = self.generate_operation_request_message(receiver, is_heartbeat=True)
                 # start_new_thread(self.threaded_on_receive_operation, ())
                 start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+
+            self.server_state_lock_by = released_by
+            self.save_state(['server_state_lock_by'])
             self.server_state_lock.release()
+
             time.sleep(Server.HEARTBEAT_TIMEOUT)
+
             self.server_state_lock.acquire()
+            self.server_state_lock_by = acquired_by
+            self.save_state(['server_state_lock_by'])
+
         print('Step down from leader. Heartbeat stops. ')
+
+        self.server_state_lock_by = released_by
+        self.save_state(['server_state_lock_by'])
         self.server_state_lock.release()
 
     def threaded_become_leader(self):
         # Initialize the next index, last log index, send the first heartbeat.
 
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         self.server_state_lock.acquire()
+        self.server_state_lock_by = acquired_by
+        self.save_state(['server_state_lock_by'])
+
         self.leader_id_lock.acquire()
+        self.leader_id_lock_by = acquired_by
+        self.save_state(['leader_id_lock_by'])
+
         self.server_term_lock.acquire()
+        self.server_term_lock_by = acquired_by
+        self.save_state(['server_term_lock_by'])
+
         self.servers_log_next_index_lock.acquire()
+        self.servers_log_next_index_lock_by = acquired_by
+        self.save_state(['servers_log_next_index_lock_by'])
+
         self.commit_index_lock.acquire()
+        self.commit_index_lock_by = acquired_by
+        self.save_state(['commit_index_lock_by'])
+
         self.commit_watches_lock.acquire()
+        self.commit_watches_lock_by = acquired_by
+        self.save_state(['commit_watches_lock_by'])
+
         self.blockchain_lock.acquire()
+        self.blockchain_lock_by = acquired_by
+        self.save_state(['blockchain_lock_by'])
+
         self.transaction_queue_lock.acquire()
+        self.transaction_queue_lock_by = acquired_by
+        self.save_state(['transaction_queue_lock_by'])
 
         print(f'Leader! Term: {self.server_term}')
         self.server_state = 'Leader'
@@ -402,13 +621,36 @@ class Server:
 
         self.save_state(['server_state', 'servers_log_next_index', 'leader_id', 'transaction_queue', 'commit_watches'])
 
+        self.server_state_lock_by = released_by
+        self.save_state(['server_state_lock_by'])
         self.server_state_lock.release()
+
+        self.leader_id_lock_by = released_by
+        self.save_state(['leader_id_lock_by'])
         self.leader_id_lock.release()
+
+        self.server_term_lock_by = released_by
+        self.save_state(['server_term_lock_by'])
         self.server_term_lock.release()
+
+        self.servers_log_next_index_lock_by = released_by
+        self.save_state(['servers_log_next_index_lock_by'])
         self.servers_log_next_index_lock.release()
+
+        self.commit_index_lock_by = released_by
+        self.save_state(['commit_index_lock_by'])
         self.commit_index_lock.release()
+
+        self.commit_watches_lock_by = released_by
+        self.save_state(['commit_watches_lock_by'])
         self.commit_watches_lock.release()
+
+        self.blockchain_lock_by = released_by
+        self.save_state(['blockchain_lock_by'])
         self.blockchain_lock.release()
+
+        self.transaction_queue_lock_by = released_by
+        self.save_state(['transaction_queue_lock_by'])
         self.transaction_queue_lock.release()
 
         start_new_thread(self.threaded_send_heartbeat, ())
@@ -427,22 +669,37 @@ class Server:
     def threaded_leader_election_watch(self):
         # Watch whether the election has timed out. Call on leader election timeout if so.
 
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         # Update the last updated time.
         self.last_election_time_lock.acquire()
+        self.last_election_time_lock_by = acquired_by
+        self.save_state(['last_election_time_lock_by'])
+
         self.last_election_time = time.time()
         self.save_state(['last_election_time'])
 
         print(f'threaded_leader_election_watch: {self.last_election_time}')
 
+        self.last_election_time_lock_by = released_by
+        self.save_state(['last_election_time_lock_by'])
         self.last_election_time_lock.release()
 
         timeout = random.uniform(Server.LEADER_ELECTION_TIMEOUT, Server.LEADER_ELECTION_TIMEOUT * 2)
         time.sleep(timeout)
         self.last_election_time_lock.acquire()
+        self.last_election_time_lock_by = acquired_by
+        self.save_state(['last_election_time_lock_by'])
+
         diff = time.time() - self.last_election_time
         if diff >= timeout:
             print('threaded_on_leader_election_timeout call')
             start_new_thread(self.threaded_on_leader_election_timeout, ())
+
+        self.last_election_time_lock_by = released_by
+        self.save_state(['last_election_time_lock_by'])
         self.last_election_time_lock.release()
 
     def generate_vote_request_message(self, receiver):
@@ -460,19 +717,33 @@ class Server:
     def threaded_on_leader_election_timeout(self):
         # Send request for votes.
 
-        print(0)
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         self.server_state_lock.acquire()
-        print(1)
+        self.server_state_lock_by = acquired_by
+        self.save_state(['server_state_lock_by'])
+
         self.leader_id_lock.acquire()
-        print(2)
+        self.leader_id_lock_by = acquired_by
+        self.save_state(['leader_id_lock_by'])
+
         self.server_term_lock.acquire()
-        print(3)
+        self.server_term_lock_by = acquired_by
+        self.save_state(['server_term_lock_by'])
+
         self.voted_candidate_lock.acquire()
-        print(4)
+        self.voted_candidate_lock_by = acquired_by
+        self.save_state(['voted_candidate_lock_by'])
+
         self.received_votes_lock.acquire()
-        print(5)
+        self.received_votes_lock_by = acquired_by
+        self.save_state(['received_votes_lock_by'])
+
         self.blockchain_lock.acquire()
-        print(6)
+        self.blockchain_lock_by = acquired_by
+        self.save_state(['blockchain_lock_by'])
 
         self.server_term += 1
         self.server_state = 'Candidate'
@@ -484,11 +755,28 @@ class Server:
 
         self.save_state(['server_term', 'server_state', 'voted_candidate', 'received_votes', 'leader_id'])
 
+        self.server_state_lock_by = released_by
+        self.save_state(['server_state_lock_by'])
         self.server_state_lock.release()
+
+        self.leader_id_lock_by = released_by
+        self.save_state(['leader_id_lock_by'])
         self.leader_id_lock.release()
+
+        self.server_term_lock_by = released_by
+        self.save_state(['server_term_lock_by'])
         self.server_term_lock.release()
+
+        self.voted_candidate_lock_by = released_by
+        self.save_state(['voted_candidate_lock_by'])
         self.voted_candidate_lock.release()
+
+        self.received_votes_lock_by = released_by
+        self.save_state(['received_votes_lock_by'])
         self.received_votes_lock.release()
+
+        self.blockchain_lock_by = released_by
+        self.save_state(['blockchain_lock_by'])
         self.blockchain_lock.release()
 
         for msg in msgs:
@@ -508,10 +796,25 @@ class Server:
     def on_receive_vote_request(self, message):
         # Receive and process vote request.
 
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         self.server_state_lock.acquire()
+        self.server_state_lock_by = acquired_by
+        self.save_state(['server_state_lock_by'])
+
         self.server_term_lock.acquire()
+        self.server_term_lock_by = acquired_by
+        self.save_state(['server_term_lock_by'])
+
         self.voted_candidate_lock.acquire()
+        self.voted_candidate_lock_by = acquired_by
+        self.save_state(['voted_candidate_lock_by'])
+
         self.blockchain_lock.acquire()
+        self.blockchain_lock_by = acquired_by
+        self.save_state(['blockchain_lock_by'])
 
         reset_leader_election = False
 
@@ -541,9 +844,20 @@ class Server:
 
         self.save_state(['server_term', 'server_state', 'voted_candidate'])
 
+        self.server_state_lock_by = released_by
+        self.save_state(['server_state_lock_by'])
         self.server_state_lock.release()
+
+        self.server_term_lock_by = released_by
+        self.save_state(['server_term_lock_by'])
         self.server_term_lock.release()
+
+        self.voted_candidate_lock_by = released_by
+        self.save_state(['voted_candidate_lock_by'])
         self.voted_candidate_lock.release()
+
+        self.blockchain_lock_by = released_by
+        self.save_state(['blockchain_lock_by'])
         self.blockchain_lock.release()
 
         # Send message and reset election timeout if vote.
@@ -554,10 +868,25 @@ class Server:
     def on_receive_vote_response(self, message):
         # Receive and process vote response.
 
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         self.server_state_lock.acquire()
+        self.server_state_lock_by = acquired_by
+        self.save_state(['server_state_lock_by'])
+
         self.server_term_lock.acquire()
+        self.server_term_lock_by = acquired_by
+        self.save_state(['server_term_lock_by'])
+
         self.last_election_time_lock.acquire()
+        self.last_election_time_lock_by = acquired_by
+        self.save_state(['last_election_time_lock_by'])
+
         self.received_votes_lock.acquire()
+        self.received_votes_lock_by = acquired_by
+        self.save_state(['received_votes_lock_by'])
 
         become_leader = False
 
@@ -578,10 +907,21 @@ class Server:
 
         self.save_state(['server_term', 'server_state', 'received_votes', 'last_election_time'])
 
-        self.server_term_lock.release()
-        self.received_votes_lock.release()
-        self.last_election_time_lock.release()
+        self.server_state_lock_by = released_by
+        self.save_state(['server_state_lock_by'])
         self.server_state_lock.release()
+
+        self.server_term_lock_by = released_by
+        self.save_state(['server_term_lock_by'])
+        self.server_term_lock.release()
+
+        self.received_votes_lock_by = released_by
+        self.save_state(['received_votes_lock_by'])
+        self.received_votes_lock.release()
+
+        self.last_election_time_lock_by = released_by
+        self.save_state(['last_election_time_lock_by'])
+        self.last_election_time_lock.release()
 
     def threaded_on_receive_vote(self, connection):
         # Receive and process the vote request/response messages.
@@ -626,7 +966,14 @@ class Server:
     def threaded_announce_leadership_to_clients(self):
         # Announce self is the new leader by sending a special client-response message without actual transaction or result.
 
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         self.server_state_lock.acquire()
+        self.server_state_lock_by = acquired_by
+        self.save_state(['server_state_lock_by'])
+
         if self.server_state == 'Leader':
             for client in Server.CLIENTS:
                 header = 'Client-Response'
@@ -637,6 +984,9 @@ class Server:
                 }
                 msg = (header, sender, client, message)
                 start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
+
+        self.server_state_lock_by = released_by
+        self.save_state(['server_state_lock_by'])
         self.server_state_lock.release()
 
     def update_balance_table(self, transaction_content):
@@ -647,18 +997,37 @@ class Server:
             self.save_state(['balance_table'])
 
     def commit_block(self, block, lock_balance_table=True):
+
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         if lock_balance_table:
             self.balance_table_lock.acquire()
+            self.balance_table_lock_by = acquired_by
+            self.save_state(['balance_table_lock_by'])
+
         for transaction in block['transactions']:
             if transaction is not None:
                 transaction_id, transaction_content = transaction
                 self.update_balance_table(transaction_content)
+
         if lock_balance_table:
+            self.balance_table_lock_by = released_by
+            self.save_state(['balance_table_lock_by'])
             self.balance_table_lock.release()
 
     def send_clients_responses(self, block, lock_balance_table=True):
+
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         if lock_balance_table:
             self.balance_table_lock.acquire()
+            self.balance_table_lock_by = acquired_by
+            self.save_state(['balance_table_lock_by'])
+
         for i, transaction in enumerate(block['transactions']):
             if transaction is not None:
                 transaction_id, transaction_content = transaction
@@ -668,18 +1037,39 @@ class Server:
                 start_new_thread(self.threaded_send_client_response,
                                  (transaction, (True, balance, estimated_balance)))
         if lock_balance_table:
+            self.balance_table_lock_by = released_by
+            self.save_state(['balance_table_lock_by'])
             self.balance_table_lock.release()
 
     def threaded_commit_watch(self, block_index):
         # Inform the client if the transaction's block has been committed.
+
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         sent = False
         print(f'Commit watch started for block index {block_index}')
         self.server_state_lock.acquire()
+        self.server_state_lock_by = acquired_by
+        self.save_state(['server_state_lock_by'])
+
         while not sent and self.server_state == 'Leader':
+
             self.commit_index_lock.acquire()
+            self.commit_index_lock_by = acquired_by
+            self.save_state(['commit_index_lock_by'])
+
             self.commit_watches_lock.acquire()
+            self.commit_watches_lock_by = acquired_by
+            self.save_state(['commit_watches_lock_by'])
+
             if self.commit_index >= block_index == self.commit_watches[0]:
+
                 self.blockchain_lock.acquire()
+                self.blockchain_lock_by = acquired_by
+                self.save_state(['blockchain_lock_by'])
+
                 print(f'Leader: Before commit balance table: {self.balance_table}')
                 block = self.blockchain[block_index]
                 print(f'Committing: {block_index}, {block}')
@@ -689,15 +1079,33 @@ class Server:
                 sent = True
                 # Remove the commit watch from the commit watch list.
                 heappop(self.commit_watches)
+
+                self.blockchain_lock_by = released_by
+                self.save_state(['blockchain_lock_by'])
                 self.blockchain_lock.release()
 
             self.save_state(['commit_watches'])
 
+            self.commit_index_lock_by = released_by
+            self.save_state(['commit_index_lock_by'])
             self.commit_index_lock.release()
+
+            self.commit_watches_lock_by = released_by
+            self.save_state(['commit_watches_lock_by'])
             self.commit_watches_lock.release()
+
+            self.server_state_lock_by = released_by
+            self.save_state(['server_state_lock_by'])
             self.server_state_lock.release()
-            # TODO: check
+
+            time.sleep(Server.SLEEP_INTERVAL)
+
             self.server_state_lock.acquire()
+            self.server_state_lock_by = acquired_by
+            self.save_state(['server_state_lock_by'])
+
+        self.server_state_lock_by = released_by
+        self.save_state(['server_state_lock_by'])
         self.server_state_lock.release()
 
     @classmethod
@@ -716,6 +1124,11 @@ class Server:
 
     def get_estimate_balance_table(self, lock_balance_table=True, lock_commit_table=True, lock_blockchain=True, from_scratch=False):
         # lock_balance_table: True if lock should be used.
+
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         def get_balance_table_change(blockchain, start_index):
             table_diff = [0, 0, 0]
             for block in blockchain[start_index:]:
@@ -729,10 +1142,18 @@ class Server:
             return table_diff
         if lock_commit_table:
             self.commit_index_lock.acquire()
+            self.commit_index_lock_by = acquired_by
+            self.save_state(['commit_index_lock_by'])
+
         if lock_blockchain:
             self.blockchain_lock.acquire()
+            self.blockchain_lock_by = acquired_by
+            self.save_state(['blockchain_lock_by'])
+
         if lock_balance_table:
             self.balance_table_lock.acquire()
+            self.balance_table_lock_by = acquired_by
+            self.save_state(['balance_table_lock_by'])
 
 
         balance_table_copy = copy.deepcopy(self.balance_table)
@@ -752,17 +1173,26 @@ class Server:
         for i, diff in enumerate(balance_table_diff):
             estimated_balance_table[i] += diff
 
-        if lock_blockchain:
-            self.blockchain_lock.release()
         if lock_commit_table:
+            self.commit_index_lock_by = released_by
+            self.save_state(['commit_index_lock_by'])
             self.commit_index_lock.release()
+        if lock_blockchain:
+            self.blockchain_lock_by = released_by
+            self.save_state(['blockchain_lock_by'])
+            self.blockchain_lock.release()
         if lock_balance_table:
+            self.balance_table_lock_by = released_by
+            self.save_state(['balance_table_lock_by'])
             self.balance_table_lock.release()
 
         return estimated_balance_table
 
     def threaded_proof_of_work(self):
 
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
         # Doing proof of work based on the queue of transactions.
         transactions = []
         nonce = None
@@ -771,29 +1201,54 @@ class Server:
         print(f'estimated_balance_table: {estimated_balance_table}')
 
         self.server_state_lock.acquire()
+        self.server_state_lock_by = acquired_by
+        self.save_state(['server_state_lock_by'])
+
         while self.server_state == 'Leader':
-            self.server_state_lock.release()
-            # print(f'server_state: Leader')
             # Add new transactions to current proof of work.
+            self.server_state_lock_by = released_by
+            self.save_state(['server_state_lock_by'])
+            self.server_state_lock.release()
 
             self.transaction_queue_lock.acquire()
+            self.transaction_queue_lock_by = acquired_by
+            self.save_state(['transaction_queue_lock_by'])
+
             while len(transactions) < Server.MAX_TRANSACTION_COUNT and len(self.transaction_queue) > 0:
                 print(f'before transaction: {self.transaction_queue}')
                 transaction = self.transaction_queue.popleft()
                 print(f'after transaction: {self.transaction_queue}')
+
+                self.transaction_queue_lock_by = released_by
+                self.save_state(['transaction_queue_lock_by'])
                 self.transaction_queue_lock.release()
+
                 if Server.is_transaction_valid(estimated_balance_table, transactions, transaction):  # Transaction valid
                     transactions.append(transaction)
                 else:  # Transaction invalid.
+
                     self.balance_table_lock.acquire()
+                    self.balance_table_lock_by = acquired_by
+                    self.save_state(['balance_table_lock_by'])
+
                     transaction_content = transaction[1]
                     balance = self.balance_table[transaction_content[0]]
                     estimated_balance = self.get_estimate_balance_table(lock_balance_table=False)[transaction_content[0]]
+
+                    self.balance_table_lock_by = released_by
+                    self.save_state(['balance_table_lock_by'])
                     self.balance_table_lock.release()
+
                     start_new_thread(self.threaded_send_client_response,
                                      (transaction, (False, balance, estimated_balance)))
                 self.save_state(['transaction_queue'])
+
                 self.transaction_queue_lock.acquire()
+                self.transaction_queue_lock_by = acquired_by
+                self.save_state(['transaction_queue_lock_by'])
+
+            self.transaction_queue_lock_by = released_by
+            self.save_state(['transaction_queue_lock_by'])
             self.transaction_queue_lock.release()
 
             # Do proof of work if transactions are not empty.
@@ -806,13 +1261,27 @@ class Server:
             # If PoW is found:
             if found:
                 self.server_state_lock.acquire()
+                self.server_state_lock_by = acquired_by
+                self.save_state(['server_state_lock_by'])
+
                 if self.server_state == 'Leader':
 
                     # Update the blockchain.
                     self.server_term_lock.acquire()
+                    self.server_term_lock_by = acquired_by
+                    self.save_state(['server_term_lock_by'])
+
                     self.accept_indexes_lock.acquire()
+                    self.accept_indexes_lock_by = acquired_by
+                    self.save_state(['accept_indexes_lock_by'])
+
                     self.commit_watches_lock.acquire()
+                    self.commit_watches_lock_by = acquired_by
+                    self.save_state(['commit_watches_lock_by'])
+
                     self.blockchain_lock.acquire()
+                    self.blockchain_lock_by = acquired_by
+                    self.save_state(['blockchain_lock_by'])
 
                     phash = None
                     if len(self.blockchain) > 0:
@@ -843,9 +1312,21 @@ class Server:
                     start_new_thread(self.threaded_commit_watch, (block_index,))
 
                     self.save_state(['blockchain', 'accept_indexes'])
+
+                    self.server_term_lock_by = released_by
+                    self.save_state(['server_term_lock_by'])
                     self.server_term_lock.release()
+
+                    self.accept_indexes_lock_by = released_by
+                    self.save_state(['accept_indexes_lock_by'])
                     self.accept_indexes_lock.release()
+
+                    self.commit_watches_lock_by = released_by
+                    self.save_state(['commit_watches_lock_by'])
                     self.commit_watches_lock.release()
+
+                    self.blockchain_lock_by = released_by
+                    self.save_state(['blockchain_lock_by'])
                     self.blockchain_lock.release()
 
                     # Reset proof of work variables.
@@ -855,40 +1336,85 @@ class Server:
                     estimated_balance_table = self.get_estimate_balance_table()
                     print("PoW done!")
 
+                self.server_state_lock_by = released_by
+                self.save_state(['server_state_lock_by'])
                 self.server_state_lock.release()
 
+            time.sleep(Server.SLEEP_INTERVAL)
+
             self.server_state_lock.acquire()
+            self.server_state_lock_by = acquired_by
+            self.save_state(['server_state_lock_by'])
+
+        self.server_state_lock_by = released_by
+        self.save_state(['server_state_lock_by'])
         self.server_state_lock.release()
 
     def threaded_on_receive_client(self, connection):
         # Receive transaction request from client.
 
+        func_name = sys._getframe().f_code.co_name
+        acquired_by = 'ACQUIRED by ' + func_name
+        released_by = 'RELEASED by ' + func_name
+
         header, sender, receiver, message = utils.receive_message(connection)
+
         self.server_state_lock.acquire()
+        self.server_state_lock_by = acquired_by
+        self.save_state(['server_state_lock_by'])
+
         if self.server_state == 'Leader':  # Process the request.
 
             transaction = message['transaction']
             transaction_id = transaction[0]
+
             self.transaction_queue_lock.acquire()
+            self.transaction_queue_lock_by = acquired_by
+            self.save_state(['transaction_queue_lock_by'])
+
             self.transaction_ids_lock.acquire()
+            self.transaction_ids_lock_by = acquired_by
+            self.save_state(['transaction_ids_lock_by'])
 
             if transaction_id not in self.transaction_ids:  # Transactions hasn't been processed yet.
                 self.transaction_ids.add(transaction_id)
                 self.transaction_queue.append(transaction)
                 self.save_state(['transaction_ids', 'transaction_queue'])
-            self.transaction_ids_lock.release()
+
+            self.server_state_lock_by = released_by
+            self.save_state(['server_state_lock_by'])
+            self.server_state_lock.release()
+
+            self.transaction_queue_lock_by = released_by
+            self.save_state(['transaction_queue_lock_by'])
             self.transaction_queue_lock.release()
 
+            self.transaction_ids_lock_by = released_by
+            self.save_state(['transaction_ids_lock_by'])
+            self.transaction_ids_lock.release()
+
         else:  # Relay the client message to the current leader.
+            self.server_state_lock_by = released_by
+            self.save_state(['server_state_lock_by'])
+            self.server_state_lock.release()
+
             while True:
+                time.sleep(Server.SLEEP_INTERVAL)
+
                 self.leader_id_lock.acquire()
+                self.leader_id_lock_by = acquired_by
+                self.save_state(['leader_id_lock_by'])
+
                 if self.leader_id is not None:  # Wait until a leader is elected.
                     msg = (header, self.server_id, self.leader_id, message)
                     start_new_thread(utils.send_message, (msg, server.CHANNEL_PORT))
+                    self.leader_id_lock_by = released_by
+                    self.save_state(['leader_id_lock_by'])
                     self.leader_id_lock.release()
                     break
+                self.leader_id_lock_by = released_by
+                self.save_state(['leader_id_lock_by'])
                 self.leader_id_lock.release()
-        self.server_state_lock.release()
 
     def start_client_listener(self):
         # Start listener for client messages.
@@ -942,3 +1468,4 @@ class Server:
 if __name__ == '__main__':
     server = Server()
     server.start()
+
