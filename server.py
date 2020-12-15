@@ -395,6 +395,7 @@ class Server:
         self.save_state(['servers_operation_last_seen_lock_by'])
 
         self.servers_operation_last_seen[sender] = time.time()
+        self.save_state(['servers_operation_last_seen'])
 
         self.servers_operation_last_seen_lock_by = released_by
         self.save_state(['servers_operation_last_seen_lock_by'])
