@@ -4,11 +4,11 @@
 
 ## Introduction
 
-This is a Python implementation of the [RAFT distributed consensus protocal](https://raft.github.io/) with a fault-tolerant distributed banking application based on the blockchain. 
+This is a Python implementation of the [RAFT distributed consensus protocol](https://raft.github.io/) with a fault-tolerant distributed banking application based on the blockchain. 
 
 ### Distributed Banking
 
-To ensure safety and high availability, the bank has a set of servers with replicated lists of transactions made by clients. When a client makes a transaction request, it will be sent to one of the servers to validate. If the transaction is valid, the server will distribute the transaction to other servers until a consensus is reached, i.e., the transaction is stored in all servers. Then, the server will notify the client of the transaction result.  
+To ensure safety and high availability, the bank has a set of servers with replicated lists of transactions made by clients. When a client makes a transaction request, it will be sent to one of the servers to validate. If the transaction is valid, the server will distribute the transaction to other servers until a consensus is reached, i.e., the transaction is stored in the majority of servers. Then, the server will notify the client of the transaction result.  
 
 ### Blockchain
 
@@ -16,12 +16,12 @@ Each server uses the blockchain as the underlying data structure for storing the
 
 ### RAFT
 
-RAFT has been used as the underlying consensus protocol to ensure proper blockchain replication. It consists of two different phases: leader election and normal operation. In the leader election phase elects the leader among the servers who communicates directly with the clients. In the normal operation phase, the leader exchanges messages with other servers (followers) to replicate the blockchain of transactions. 
+RAFT has been used as the underlying consensus protocol to ensure proper blockchain replication. It consists of two different phases: leader election and normal operation. In the leader election phase, the servers elect the leader among each other who communicates directly with the clients. In the normal operation phase, the leader exchanges messages with other servers (followers) to replicate the blockchain of transactions. 
 
 ### Fault-tolerance
 
 We guarantee fault-tolerance for two types of failures: node failure (crash) and network partition. 
-* Node failure: This is the scenario when one or more servers crash. If a follower fails, the rest of the servers should still perform normal operations as long as they can form a majority quorum. If a leader fails, the rest of the servers starts a new leader election, and once a leader is elected by a quorum, the normal operations resume. Servers also save their blockchains to the disk as persistent states, so that when they recover, they can resume their operations with the save states. We simulate this type of failure by killing and restarting the server processes. 
+* Node failure: This is the scenario when one or more servers crash. If a follower fails, the rest of the servers should still perform normal operations as long as they can form a majority quorum. If a leader fails, the rest of the servers starts a new leader election, and once a leader is elected by a quorum, the normal operations resume. Servers also save their blockchains to the disk as persistent states, so that when they recover and can resume their operations with the saved states. We simulate this type of failure by killing (i.e. CTRL+C) and restarting the server processes. 
 * Network partition: This is the scenario when the servers are decomposed into multiple partitions, where only servers within the same partition can communicate with each other. In this case, the partition that still covers a majority quorum can (possibly elect a new leader and) resume normal operations. We simulate this type of failure by a centralized channel that can be configured to relay messages between subsets of servers. The channel also adds randomized delay in relaying to simulate network delays. 
 
 ## How to Run
@@ -30,7 +30,7 @@ All our codes are written and tested with Python 3.7.
 
 ### Starting the processes
 
-First, start the centralized channel with `python channel.py` in a terminal. Then, start three servers with `python server.py` in three different terminals. Each one will prompt you to select its id (from 1, 2, and 3) and you should select different ids for different processes. Do the same to start three clients with `python client.py`. 
+First, start the centralized channel with `python channel.py` in a terminal. Then, start three servers with `python server.py` in three different terminals. Each one will prompt you to select its id (from 0, 1, and 2) and you should select different ids for different processes. Do the same to start three clients with `python client.py`. 
 
 ### Testing normal scenarios
 
