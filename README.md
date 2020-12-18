@@ -30,7 +30,9 @@ All our codes are written and tested with Python 3.7.
 
 ### Starting the processes
 
-First, start the centralized channel with `python channel.py` in a terminal. Then, start three servers with `python server.py` in three different terminals. Each one will prompt you to select its id (from 0, 1, and 2) and you should select different ids for different processes. Do the same to start three clients with `python client.py`. 
+First, start the centralized channel with `python channel.py` in a terminal. Then, start three servers with `python server.py` in three different terminals. Each one will prompt you to select its id (from 0, 1, and 2) and you should select different ids for different processes. Do the same to start three clients with `python client.py`.
+
+The first blockchain will be created from [first_blockchain.txt](first_blockchain.txt) which will be loaded by the servers at the start. One can make the file empty which results in the empty blockchain at the start.
 
 ### Testing normal scenarios
 
