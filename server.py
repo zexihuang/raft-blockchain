@@ -571,8 +571,8 @@ class Server:
         acquired_by = 'ACQUIRED by ' + func_name
         released_by = 'RELEASED by ' + func_name
 
-        self.logger.info('Response watch starts, ', time.time())
-        timeout = random.uniform(Server.MESSAGE_SENDING_TIMEOUT, Server.MESSAGE_SENDING_TIMEOUT*2)
+        self.logger.info(f'Response watch starts, {time.time()}')
+        timeout = random.uniform(Server.MESSAGE_SENDING_TIMEOUT, Server.MESSAGE_SENDING_TIMEOUT * 2)
         time.sleep(timeout)
 
         self.servers_operation_last_seen_lock.acquire()
@@ -604,7 +604,7 @@ class Server:
                 # start_new_thread(self.threaded_on_receive_operation, ())
                 self.logger.info(f'Sending append request {msg} to {receiver}')
                 start_new_thread(utils.send_message, (msg, Server.CHANNEL_PORT))
-                start_new_thread(self.threaded_response_watch, (receiver, ))
+                start_new_thread(self.threaded_response_watch, (receiver,))
 
         self.server_state_lock_by = released_by
         self.save_state(['server_state_lock_by'])
@@ -734,7 +734,6 @@ class Server:
         self.transaction_queue_lock_by = released_by
         self.save_state(['transaction_queue_lock_by'])
         self.transaction_queue_lock.release()
-
 
     def start_operation_listener(self):
         # Start listener for operation messages.
@@ -984,7 +983,7 @@ class Server:
                 self.last_election_time = time.time()  # Update the last election time to avoid previous timeout watches. Don't start new timeout watch.
 
         if become_leader and self.server_state != 'Leader':
-            start_new_thread(self.threaded_become_leader, (self.server_term, ))
+            start_new_thread(self.threaded_become_leader, (self.server_term,))
 
         self.save_state(['server_term', 'server_state', 'received_votes', 'last_election_time'])
 
